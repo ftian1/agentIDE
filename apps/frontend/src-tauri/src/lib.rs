@@ -27,7 +27,8 @@ pub struct AgentMessage {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let log_file = std::fs::File::create("/tmp/remote-ai-ide.log")
+    let log_path = std::env::temp_dir().join("remote-ai-ide.log");
+    let log_file = std::fs::File::create(&log_path)
         .expect("Failed to create log file");
     tracing_subscriber::fmt()
         .with_writer(std::sync::Mutex::new(log_file))
