@@ -7,9 +7,11 @@ import { SessionRailInner } from '../session/SessionRail';
 import { useConnectionStore } from '../../stores/connectionStore';
 
 export function ExplorerPanel({ onNewConnection }: { onNewConnection: () => void }) {
+  (window as any).__trackRender('ExplorerPanel');
   const [sessionsOpen, setSessionsOpen] = useState(true);
   const [connectionsOpen, setConnectionsOpen] = useState(true);
-  const connections = useConnectionStore((s) => Object.values(s.connections));
+  const connections = useConnectionStore((s) => s.connections);
+  const connList = Object.values(connections);
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -35,10 +37,10 @@ export function ExplorerPanel({ onNewConnection }: { onNewConnection: () => void
       </button>
       {connectionsOpen && (
         <div className="px-2 py-2">
-          {connections.length === 0 ? (
+          {connList.length === 0 ? (
             <p className="px-2 text-xs text-text-secondary italic">No connections</p>
           ) : (
-            connections.map((c) => (
+            connList.map((c) => (
               <div
                 key={c.id}
                 className="px-2 py-1 rounded text-xs text-text-secondary flex items-center gap-2"
