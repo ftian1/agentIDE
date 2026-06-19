@@ -1,17 +1,58 @@
 import type { ReactNode } from 'react';
+import { ActivityBar } from '../activity/ActivityBar';
+import { SecondarySidebar } from './SecondarySidebar';
+import { EditorTabBar } from './EditorTabBar';
+import { BottomPanel } from './BottomPanel';
 
 interface AppShellProps {
   children: ReactNode;
+  sidebar?: ReactNode;
+  bottomPanelContent?: ReactNode;
+  statusBar?: ReactNode;
+  rightPanel?: ReactNode;
 }
 
-/** Top-level application layout: sidebar | main | detail-dock | status-bar. */
-export function AppShell({ children }: AppShellProps) {
+/**
+ * Antigravity-style IDE layout:
+ *
+ *   ActivityBar | SecondarySidebar | EditorTabBar + ContentArea + BottomPanel | RightPanel
+ *   StatusBar (bottom)
+ */
+export function AppShell({ children, sidebar, bottomPanelContent, statusBar, rightPanel }: AppShellProps) {
   return (
-    <div className="flex flex-col h-screen">
-      <div className="flex flex-1 overflow-hidden">{children}</div>
+    <div className="flex flex-col h-screen bg-bg-primary">
+      {/* Main row */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Activity Bar (leftmost) */}
+        <ActivityBar />
+
+        {/* Secondary Sidebar (explorer / search / source control / settings) */}
+        {sidebar}
+
+        {/* Center column: editor tabs + content + bottom panel */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <EditorTabBar />
+          {/* Content area (main editor workspace or empty state) */}
+          <div className="flex-1 overflow-hidden">
+            {children}
+          </div>
+          {/* Bottom panel (terminal / problems / output / code changes) */}
+          <BottomPanel>
+            {bottomPanelContent}
+          </BottomPanel>
+        </div>
+
+        {/* Right panel (session detail) */}
+        {rightPanel}
+      </div>
+
+      {/* Status Bar */}
+      {statusBar}
     </div>
   );
 }
+
+/* ── Sub-components for backward compatibility ── */
 
 function Sidebar({ children }: { children: ReactNode }) {
   return (
@@ -50,7 +91,7 @@ function RightPanel({ children, onClose }: { children: ReactNode; onClose: () =>
 
 function StatusBar({ children }: { children: ReactNode }) {
   return (
-    <footer className="h-8 flex-shrink-0 bg-bg-secondary border-t border-border flex items-center px-3">
+    <footer className="h-6 flex-shrink-0 bg-bg-secondary border-t border-border flex items-center px-3">
       {children}
     </footer>
   );
