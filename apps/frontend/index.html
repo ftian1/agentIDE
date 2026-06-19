@@ -5,8 +5,16 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Remote AI IDE</title>
+    <!-- Inline dark background: prevents white flash before JS/CSS loads -->
+    <style>
+      html, body, #root {
+        margin: 0; padding: 0;
+        height: 100%; overflow: hidden;
+        background: #0d1117; color: #e6edf3;
+      }
+    </style>
   </head>
-  <body class="bg-gray-950 text-gray-100">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

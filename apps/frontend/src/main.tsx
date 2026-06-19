@@ -1,7 +1,11 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './App';
+import { initCodeChangeListeners } from './stores/codeChangeStore';
 import './styles/index.css';
+
+// Set up Tauri event listeners before React render (avoids render-loop side effects)
+initCodeChangeListeners();
 
 /** Simple error boundary — shows React rendering errors visibly instead of a black screen. */
 class ErrorBoundary extends React.Component<
