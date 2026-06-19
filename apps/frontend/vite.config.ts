@@ -23,12 +23,15 @@ export default defineConfig(async () => ({
     // Code-split heavy deps for faster initial load
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-xterm': ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-web-links'],
-          'vendor-charts': ['recharts'],
-          'vendor-react': ['react', 'react-dom'],
+        manualChunks(id) {
+          // xterm is lazy-loaded via React.lazy — keep it separate
+          if (id.includes('@xterm')) return 'vendor-xterm';
+          // Monaco is lazy-loaded — keep in its own chunk
+          if (id.includes('monaco')) return 'vendor-monaco';
         },
       },
     },
+    // Shave off bytes from production builds
+    sourcemap: false,
   },
 }));

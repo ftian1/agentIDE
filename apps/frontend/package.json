@@ -20,7 +20,6 @@
     "lucide-react": "^0.460.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "recharts": "^2.15.0",
     "shared-types": "workspace:*",
     "zustand": "^5.0.0"
   },

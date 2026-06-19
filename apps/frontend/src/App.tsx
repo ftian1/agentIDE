@@ -1,15 +1,34 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, lazy, Suspense } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { SecondarySidebar } from './components/layout/SecondarySidebar';
-import { ConnectionDialog } from './components/connection/ConnectionDialog';
 import { ExplorerPanel } from './components/explorer/ExplorerPanel';
 import { SearchPanel } from './components/search/SearchPanel';
-import { CodeChangesSidebar } from './components/changes/CodeChangesSidebar';
-import { CodeChangeEditor } from './components/changes/CodeChangeEditor';
-import { TerminalPane } from './components/terminal/TerminalPane';
-import { SessionDetail } from './components/detail/SessionDetail';
 import { StatusPanel } from './components/status/StatusPanel';
 import { useLayoutStore } from './stores/layoutStore';
+
+/** Heavy components lazy-loaded — only fetched when actually needed. */
+const CodeChangesSidebar = lazy(() =>
+  import('./components/changes/CodeChangesSidebar').then(m => ({ default: m.CodeChangesSidebar })));
+const CodeChangeEditor = lazy(() =>
+  import('./components/changes/CodeChangeEditor').then(m => ({ default: m.CodeChangeEditor })));
+const TerminalPane = lazy(() =>
+  import('./components/terminal/TerminalPane').then(m => ({ default: m.TerminalPane })));
+const SessionDetail = lazy(() =>
+  import('./components/detail/SessionDetail').then(m => ({ default: m.SessionDetail })));
+const ConnectionDialog = lazy(() =>
+  import('./components/connection/ConnectionDialog').then(m => ({ default: m.ConnectionDialog })));
+
+/** Minimal loading placeholder — avoids layout shift. */
+function Spinner({ label }: { label?: string }) {
+  return (
+    <div className="flex items-center justify-center h-full">
+      <div className="text-center space-y-2">
+        <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin mx-auto" />
+        {label && <p className="text-xs text-text-secondary">{label}</p>}
+      </div>
+    </div>
+  );
+}
 
 function SettingsPanel() {
   return (
@@ -35,7 +54,6 @@ export function App() {
   const editorTabs = useLayoutStore((s) => s.editorTabs);
   const activeEditorTabId = useLayoutStore((s) => s.activeEditorTabId);
 
-  // Sidebar content switches based on ActivityBar selection
   const sidebarContent = useMemo(() => {
     switch (activeActivity) {
       case 'explorer':
@@ -43,7 +61,11 @@ export function App() {
       case 'search':
         return <SearchPanel />;
       case 'sourceControl':
-        return <CodeChangesSidebar />;
+        return (
+          <Suspense fallback={<Spinner label="Loading changes..." />}>
+            <CodeChangesSidebar />
+          </Suspense>
+        );
       case 'settings':
         return <SettingsPanel />;
       default:
@@ -51,11 +73,14 @@ export function App() {
     }
   }, [activeActivity]);
 
-  // Bottom panel content switches based on panel tab
   const bottomContent = useMemo(() => {
     switch (bottomPanelTab) {
       case 'terminal':
-        return <TerminalPane />;
+        return (
+          <Suspense fallback={<Spinner label="Loading terminal..." />}>
+            <TerminalPane />
+          </Suspense>
+        );
       case 'problems':
         return (
           <div className="flex items-center justify-center h-full">
@@ -81,11 +106,14 @@ export function App() {
     }
   }, [bottomPanelTab]);
 
-  // Main content: show CodeChangeEditor if a code change file is open, otherwise welcome screen
   const mainContent = useMemo(() => {
     const activeTab = editorTabs.find((t) => t.id === activeEditorTabId);
     if (activeTab?.changeSetId) {
-      return <CodeChangeEditor />;
+      return (
+        <Suspense fallback={<Spinner label="Loading diff editor..." />}>
+          <CodeChangeEditor />
+        </Suspense>
+      );
     }
     return (
       <div className="flex-1 flex flex-col items-center justify-center">
@@ -119,7 +147,9 @@ export function App() {
         rightPanel={
           rightPanelVisible ? (
             <AppShell.RightPanel onClose={toggleRightPanel}>
-              <SessionDetail />
+              <Suspense fallback={<Spinner label="Loading..." />}>
+                <SessionDetail />
+              </Suspense>
             </AppShell.RightPanel>
           ) : undefined
         }
@@ -127,9 +157,10 @@ export function App() {
         {mainContent}
       </AppShell>
 
-      {/* Modal overlay */}
       {showConnectionDialog && (
-        <ConnectionDialog onClose={() => setShowConnectionDialog(false)} />
+        <Suspense fallback={null}>
+          <ConnectionDialog onClose={() => setShowConnectionDialog(false)} />
+        </Suspense>
       )}
     </>
   );
