@@ -14,8 +14,8 @@ export function SessionRail({ onNewConnection }: Props) {
   const setActive = useSessionStore((s) => s.setActive);
   const spawn = useSessionStore((s) => s.spawn);
   const close = useSessionStore((s) => s.close);
-  const [tool, setTool] = useState('echo');
-  const [args, setArgs] = useState('Hello from Remote AI IDE');
+  const [tool, setTool] = useState('');
+  const [args, setArgs] = useState('');
   const [spawning, setSpawning] = useState(false);
 
   const sessionList = Object.values(sessions);

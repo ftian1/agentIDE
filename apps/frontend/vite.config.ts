@@ -17,4 +17,18 @@ export default defineConfig(async () => ({
       ignored: ['**/src-tauri/**'],
     },
   },
+  build: {
+    target: 'esnext',
+    minify: 'esbuild',
+    // Code-split heavy deps for faster initial load
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-xterm': ['@xterm/xterm', '@xterm/addon-fit', '@xterm/addon-web-links'],
+          'vendor-charts': ['recharts'],
+          'vendor-react': ['react', 'react-dom'],
+        },
+      },
+    },
+  },
 }));

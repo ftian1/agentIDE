@@ -1,6 +1,7 @@
 /**
- * Connection API — wrappers around Tauri IPC for SSH connection management.
+ * Connection API — wraps Tauri IPC for SSH connection management.
  */
+import { invoke } from '@tauri-apps/api/core';
 import type { ConnectionConfig, ConnectionInfo } from './types';
 
 export interface ConnectionApi {
@@ -13,17 +14,17 @@ export interface ConnectionApi {
 /** Create a ConnectionApi backed by Tauri IPC. */
 export function createConnectionApi(): ConnectionApi {
   return {
-    async connect(_config: ConnectionConfig): Promise<ConnectionInfo> {
-      throw new Error('ConnectionApi: not yet implemented (Phase 3)');
+    async connect(config: ConnectionConfig): Promise<ConnectionInfo> {
+      return invoke<ConnectionInfo>('connect', { req: config });
     },
-    async disconnect(_connectionId: string): Promise<void> {
-      throw new Error('ConnectionApi: not yet implemented (Phase 3)');
+    async disconnect(connectionId: string): Promise<void> {
+      return invoke('disconnect', { connectionId });
     },
     async listConnections(): Promise<ConnectionInfo[]> {
-      return [];
+      return invoke<ConnectionInfo[]>('list_connections');
     },
     async listSshConfigs(): Promise<Record<string, unknown>[]> {
-      return [];
+      return invoke<Record<string, unknown>[]>('list_ssh_configs');
     },
   };
 }
