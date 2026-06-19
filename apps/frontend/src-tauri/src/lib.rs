@@ -50,17 +50,23 @@ pub fn run() {
 
             eprintln!("[remote-ai-ide] Setup running...");
 
-            // Try to spawn the local agent via IPC (development mode)
+            // Try IPC only on Linux (agent binary is always Linux).
+            // On Windows/macOS, the agent runs on the remote host.
             let agent_transport: Option<Arc<dyn transport::Transport>> =
-                match transport::ipc::IpcTransport::spawn() {
-                    Ok(t) => {
-                        eprintln!("[remote-ai-ide] Local agent started via IPC ✓");
-                        Some(Arc::new(t))
+                if cfg!(target_os = "linux") {
+                    match transport::ipc::IpcTransport::spawn() {
+                        Ok(t) => {
+                            tracing::info!("Local agent started via IPC ✓");
+                            Some(Arc::new(t))
+                        }
+                        Err(e) => {
+                            tracing::warn!("Local agent not available: {e}");
+                            None
+                        }
                     }
-                    Err(e) => {
-                        eprintln!("[remote-ai-ide] Agent not available: {} (will need remote connection)", e);
-                        None
-                    }
+                } else {
+                    tracing::info!("Non-Linux host — agent runs on remote machine");
+                    None
                 };
 
             let state = AppState {
