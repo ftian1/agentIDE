@@ -1,0 +1,12 @@
+{
+  "name": "remote-ai-ide",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "cd apps/frontend && pnpm tauri dev",
+    "build": "cd apps/frontend && pnpm tauri build",
+    "build:remote": "bash scripts/build-remote.sh",
+    "lint": "pnpm --filter frontend lint",
+    "typecheck": "pnpm --filter shared-types build && pnpm --filter frontend typecheck"
+  }
+}

@@ -1,0 +1,33 @@
+[package]
+name = "remote-agent-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "agent"
+path = "src/main.rs"
+
+[[bin]]
+name = "ssh-test"
+path = "src/bin/ssh-test.rs"
+
+[dependencies]
+shared-protocol = { path = "../shared-protocol" }
+tokio.workspace = true
+serde.workspace = true
+rmp-serde.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow.workspace = true
+uuid.workspace = true
+dashmap.workspace = true
+chrono.workspace = true
+bytes = "1"
+portable-pty = "0.9"
+
+# SSH support for ssh-test binary
+russh = { version = "0.61", features = ["async-trait"] }
+ssh-key = { version = "0.6", features = ["ed25519"] }
+base64 = "0.22"
+async-trait = "0.1"

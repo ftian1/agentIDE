@@ -1,0 +1,44 @@
+[package]
+name = "remote-ai-ide"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "remote_ai_ide_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[features]
+default = []
+ssh = ["russh", "ssh-key", "base64", "shell-words"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+shared-protocol = { path = "../../../crates/shared-protocol" }
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+serde.workspace = true
+serde_json = "1"
+serde_bytes = "0.11"
+rmp-serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow.workspace = true
+uuid.workspace = true
+dashmap.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
+async-trait = "0.1"
+dirs = "6"
+bytes = "1"
+which = "7"
+
+# SSH support (optional during development)
+russh = { version = "0.61", optional = true }
+ssh-key = { version = "0.6", features = ["ed25519"], optional = true }
+base64 = { version = "0.22", optional = true }
+shell-words = { version = "1", optional = true }

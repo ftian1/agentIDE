@@ -1,0 +1,36 @@
+# Rust
+target/
+debug/
+**/*.rs.bk
+*.pdb
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Tauri
+apps/frontend/src-tauri/target/
+apps/frontend/src-tauri/binaries/
+
+# Test binaries
+crates/remote-agent-host/tests/test-agent
+
+# Logs
+*.log
+/tmp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local

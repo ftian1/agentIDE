@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libdbus-1-dev pkg-config
+      - name: Build
+        run: cargo build --workspace
+      - name: Test
+        run: cargo test --workspace
+
+  test-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+      - name: Install
+        run: pnpm install
+      - name: Build shared types
+        run: pnpm --filter shared-types build
+      - name: Typecheck
+        run: pnpm --filter frontend typecheck
+
+  build-remote-agent:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build agent
+        run: cargo build -p remote-agent-host --target ${{ matrix.target }} --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/agent
+
+  build-windows:
+    needs: build-remote-agent
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+      - name: Download agent artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: agent-*
+          path: apps/frontend/src-tauri/binaries/
+          merge-multiple: true
+      - name: Rename binaries
+        run: |
+          mv apps/frontend/src-tauri/binaries/agent-x86_64-unknown-linux-gnu apps/frontend/src-tauri/binaries/agent-x86_64
+          mv apps/frontend/src-tauri/binaries/agent-aarch64-unknown-linux-gnu apps/frontend/src-tauri/binaries/agent-aarch64
+        shell: bash
+      - name: Install frontend
+        run: pnpm install
+      - name: Build Tauri app
+        run: pnpm tauri build
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: target/release/bundle/msi/*.msi
