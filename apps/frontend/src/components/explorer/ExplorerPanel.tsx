@@ -7,7 +7,6 @@ import { SessionRailInner } from '../session/SessionRail';
 import { useConnectionStore } from '../../stores/connectionStore';
 
 export function ExplorerPanel({ onNewConnection }: { onNewConnection: () => void }) {
-  (window as any).__trackRender('ExplorerPanel');
   const [sessionsOpen, setSessionsOpen] = useState(true);
   const [connectionsOpen, setConnectionsOpen] = useState(true);
   const connections = useConnectionStore((s) => s.connections);
