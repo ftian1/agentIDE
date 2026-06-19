@@ -9,6 +9,28 @@ interface Props {
 }
 
 export function SessionRail({ onNewConnection }: Props) {
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-3 border-b border-border">
+        <span className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
+          Sessions
+        </span>
+        <button
+          onClick={onNewConnection}
+          className="text-accent hover:text-blue-300 text-lg leading-none"
+          title="New Connection"
+        >
+          +
+        </button>
+      </div>
+      <SessionRailInner onNewConnection={onNewConnection} />
+    </div>
+  );
+}
+
+/** Inner content of the session rail — spawn bar + session list. */
+export function SessionRailInner({ onNewConnection: _onNewConnection }: Props) {
   const sessions = useSessionStore((s) => s.sessions);
   const activeId = useSessionStore((s) => s.activeSessionId);
   const setActive = useSessionStore((s) => s.setActive);
@@ -39,21 +61,7 @@ export function SessionRail({ onNewConnection }: Props) {
   }, [tool, args, spawn]);
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-3 border-b border-border">
-        <span className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
-          Sessions
-        </span>
-        <button
-          onClick={onNewConnection}
-          className="text-accent hover:text-blue-300 text-lg leading-none"
-          title="New Connection"
-        >
-          +
-        </button>
-      </div>
-
+    <>
       {/* Quick spawn bar */}
       <div className="p-2 border-b border-border space-y-1.5">
         <input
@@ -146,6 +154,6 @@ export function SessionRail({ onNewConnection }: Props) {
           </>
         )}
       </div>
-    </div>
+    </>
   );
 }
