@@ -2,9 +2,20 @@
 //!
 //! Supports key-based (ed25519, rsa), agent-forwarded, and password
 //! authentication.
+//!
+//! API patterns verified against the working [`ssh-test`] binary in
+//! `crates/remote-agent-host/src/bin/ssh-test.rs`.
+//!
+//! IMPORTANT: russh 0.61 depends on `ssh-key` 0.7.x internally. The app's
+//! direct `ssh-key` 0.6.x dependency is a DIFFERENT type. Always use
+//! `russh::keys::PublicKey` / `russh::keys::PrivateKey` (the russh
+//! re-exports) when interacting with the russh API, never the app's own
+//! `ssh_key` types.
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use russh::*;
+use russh::client::Handler;
+use russh::keys::PrivateKeyWithHashAlg;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -27,26 +38,22 @@ pub enum AuthMethod {
 
 /// Result of establishing an SSH connection.
 pub struct SshSession {
-    pub handle: russh::client::Handle<SshClientHandler>,
-    pub connection: client::Connection,
+    pub handle: client::Handle<SshClientHandler>,
 }
-
-/// An opened channel on an SSH session (for exec/shell).
-pub type SshChannel = russh::Channel<Msg>;
 
 /// Our minimal SSH client handler.
 pub struct SshClientHandler;
 
-#[async_trait::async_trait]
-impl client::Handler for SshClientHandler {
+impl Handler for SshClientHandler {
     type Error = anyhow::Error;
 
-    async fn check_server_key(
+    /// Accept all server host keys.
+    fn check_server_key(
         &mut self,
-        _server_public_key: &ssh_key::PublicKey,
-    ) -> Result<bool, Self::Error> {
+        _server_public_key: &russh::keys::PublicKey,
+    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
         tracing::info!("Accepting server host key (known_hosts not yet implemented)");
-        Ok(true)
+        std::future::ready(Ok(true))
     }
 }
 
@@ -54,82 +61,70 @@ impl client::Handler for SshClientHandler {
 pub async fn connect(params: &SshConnectionParams) -> anyhow::Result<SshSession> {
     tracing::info!(host = %params.host, port = params.port, user = %params.user, "Connecting via SSH");
 
-    let config = client::Config::default();
-    let config = Arc::new(config);
+    let config = Arc::new(client::Config::default());
     let sh = SshClientHandler;
 
     let addr = format!("{}:{}", params.host, params.port);
-    let mut connection = russh::client::connect(config, &addr, sh).await
+    let mut handle = russh::client::connect(config, &addr, sh).await
         .context("SSH connection failed")?;
 
-    let authenticated = match &params.auth {
+    let auth_result = match &params.auth {
         AuthMethod::Key(identity_file) => {
-            let key_path = identity_file.clone().unwrap_or_else(|| default_key_path());
+            let key_path = identity_file.clone().unwrap_or_else(default_key_path);
             tracing::info!(key = %key_path.display(), "Authenticating with key");
 
-            match load_key(&key_path) {
-                Ok(key) => {
-                    connection.authenticate_publickey(&params.user, Arc::new(key)).await
-                        .context("Key authentication failed")?
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Key loading failed, falling back");
-                    false
-                }
-            }
+            let key = load_key(&key_path)
+                .context("Failed to load private key")?;
+            let key_with_hash = PrivateKeyWithHashAlg::new(Arc::new(key), None);
+            handle.authenticate_publickey(&params.user, key_with_hash).await
+                .context("Key authentication failed")?
         }
         AuthMethod::Agent => {
             tracing::info!("Agent authentication — falling back to default key");
             let key_path = default_key_path();
-            if key_path.exists() {
-                let key = load_key(&key_path)?;
-                connection.authenticate_publickey(&params.user, Arc::new(key)).await
-                    .context("Key authentication failed")?
-            } else {
-                bail!("No default key found for agent auth");
-            }
+            let key = load_key(&key_path)
+                .context("Failed to load default key for agent auth")?;
+            let key_with_hash = PrivateKeyWithHashAlg::new(Arc::new(key), None);
+            handle.authenticate_publickey(&params.user, key_with_hash).await
+                .context("Key authentication failed")?
         }
         AuthMethod::Password(password) => {
             tracing::info!("Authenticating with password");
-            connection.authenticate_password(&params.user, password).await
+            handle.authenticate_password(&params.user, password).await
                 .context("Password authentication failed")?
         }
     };
 
-    if !authenticated {
-        bail!("All authentication methods failed");
-    }
+    anyhow::ensure!(auth_result.success(), "Authentication rejected by server");
 
-    tracing::info!(host = %params.host, "SSH connected");
+    tracing::info!(host = %params.host, "SSH connected ✓");
 
-    Ok(SshSession {
-        handle: connection.handle(),
-        connection,
-    })
+    Ok(SshSession { handle })
 }
 
-/// Open an exec channel — runs a command and returns a channel piped to its stdin/stdout.
+/// Open an exec channel.
 pub async fn open_exec_channel(
     session: &SshSession,
     command: &str,
-) -> anyhow::Result<SshChannel> {
+) -> anyhow::Result<Channel<client::Msg>> {
     let channel = session.handle.channel_open_session().await
         .context("Failed to open SSH channel")?;
 
-    channel.exec(true, command.as_bytes()).await
+    channel.exec(true, command).await
         .context("Failed to exec command")?;
 
     Ok(channel)
 }
 
-/// Run a simple command on the remote host and return stdout as string.
+/// Run a simple command on the remote host and return stdout.
 pub async fn exec_remote(
     session: &SshSession,
     command: &str,
 ) -> anyhow::Result<String> {
     let mut channel = open_exec_channel(session, command).await?;
-    let mut output = Vec::new();
+    channel.eof().await.context("Failed to send EOF")?;
 
+    let mut output = Vec::new();
     loop {
         match channel.wait().await {
             Some(ChannelMsg::Data { ref data }) => {
@@ -143,21 +138,22 @@ pub async fn exec_remote(
     Ok(String::from_utf8_lossy(&output).trim().to_string())
 }
 
-/// Get the default SSH key path (~/.ssh/id_ed25519 or ~/.ssh/id_rsa).
+/// Default SSH key path.
 fn default_key_path() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_default();
     let ed = home.join(".ssh/id_ed25519");
     if ed.exists() { ed } else { home.join(".ssh/id_rsa") }
 }
 
-/// Load a private key from a file, trying various formats.
-fn load_key(path: &PathBuf) -> anyhow::Result<ssh_key::PrivateKey> {
+/// Load a private key from file.
+///
+/// Uses `russh::keys::PrivateKey` (re-export of ssh-key 0.7.x) for
+/// compatibility with the russh 0.61 API.
+fn load_key(path: &PathBuf) -> anyhow::Result<russh::keys::PrivateKey> {
     let key_data = std::fs::read_to_string(path)
         .context("Failed to read key file")?;
 
-    // Try OpenSSH format first, then PEM
-    ssh_key::PrivateKey::from_openssh(&key_data)
-        .or_else(|_| ssh_key::PrivateKey::from_pkcs8_pem(&key_data))
-        .or_else(|_| ssh_key::PrivateKey::from_pkcs1_pem(&key_data))
-        .context("Failed to parse private key (tried OpenSSH, PKCS8, PKCS1)")
+    russh::keys::PrivateKey::from_openssh(&key_data)
+        .context("Failed to parse private key — only OpenSSH format is supported.\n\
+                  Hint: convert with `ssh-keygen -p -m RFC4716 -f <key>`")
 }

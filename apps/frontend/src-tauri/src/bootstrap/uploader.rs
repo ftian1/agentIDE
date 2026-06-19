@@ -10,6 +10,7 @@ use anyhow::Context;
 use base64::Engine;
 
 use crate::connection::ssh::{self, SshSession};
+use crate::transport::Transport;
 
 /// Architecture-specific binary data.
 pub struct EmbeddedBinary {

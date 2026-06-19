@@ -2,7 +2,6 @@
 //!
 //! Flow: detect platform → check existing version → upload if needed → start agent → handshake.
 
-use anyhow::Context;
 use tauri::{AppHandle, Emitter};
 
 use super::detector;

@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <!--
+    Remote AI IDE — Windows MSI Installer (with uninstall support)
+    Built with wixl (msitools)
+  -->
+
+  <Product
+    Id="*"
+    Name="Remote AI IDE"
+    Language="2052"
+    Version="0.1.0"
+    Manufacturer="Remote AI IDE Team"
+    UpgradeCode="3e02db58-daf9-4b8d-8455-15fd57309b91">
+
+    <Package
+      InstallerVersion="200"
+      Compressed="yes"
+      InstallScope="perMachine"
+      Comments="Remote AI IDE — AI-powered remote development" />
+
+    <!-- Upgrade support: automatic remove of older versions on install -->
+    <Upgrade Id="3e02db58-daf9-4b8d-8455-15fd57309b91">
+      <UpgradeVersion Minimum="0.0.0" Maximum="0.1.0"
+                      Property="PREVIOUSFOUND"
+                      IncludeMinimum="yes" IncludeMaximum="no" />
+    </Upgrade>
+
+    <InstallExecuteSequence>
+      <RemoveExistingProducts Before="InstallInitialize" />
+    </InstallExecuteSequence>
+
+    <Media Id="1" Cabinet="app.cab" EmbedCab="yes" />
+
+    <!-- Icon for shortcuts (registered in the MSI Icon table) -->
+    <Icon Id="AppIconId" SourceFile="icons/icon.ico" />
+
+    <!-- ===== Directory tree ===== -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+
+      <!-- Main install: C:\Program Files\Remote AI IDE -->
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="APPLICATIONFOLDER" Name="Remote AI IDE">
+
+          <!-- App executable + DLL + shortcuts -->
+          <Component Id="MainApp" Guid="a7b2c3d4-e5f6-7890-abcd-ef1234567890" Win64="yes">
+            <File Id="MainExe"
+                  Name="remote-ai-ide.exe"
+                  Source="binaries/remote-ai-ide.exe"
+                  KeyPath="yes">
+              <Shortcut Id="StartMenuShortcut"
+                        Directory="AppProgramMenuFolder"
+                        Name="Remote AI IDE"
+                        WorkingDirectory="APPLICATIONFOLDER"
+                        Icon="AppIconId"
+                        IconIndex="0"
+                        Advertise="no" />
+              <Shortcut Id="DesktopShortcut"
+                        Directory="DesktopFolder"
+                        Name="Remote AI IDE"
+                        WorkingDirectory="APPLICATIONFOLDER"
+                        Icon="AppIconId"
+                        IconIndex="0"
+                        Advertise="no" />
+            </File>
+            <File Id="MainDll"
+                  Name="remote_ai_ide_lib.dll"
+                  Source="binaries/remote_ai_ide_lib.dll" />
+            <RegistryValue Root="HKLM"
+                           Key="Software\Remote AI IDE"
+                           Name="InstallPath"
+                           Value="[APPLICATIONFOLDER]"
+                           Type="string"
+                           KeyPath="no" />
+          </Component>
+
+          <!-- Icon file -->
+          <Component Id="AppIcon" Guid="b8c3d4e5-f6a7-8901-bcde-f12345678901" Win64="yes">
+            <File Id="AppIconFile"
+                  Name="appicon.ico"
+                  Source="icons/icon.ico"
+                  KeyPath="yes" />
+          </Component>
+
+        </Directory>
+      </Directory>
+
+      <!-- Start Menu: Programs\Remote AI IDE -->
+      <Directory Id="ProgramMenuFolder" Name="Programs">
+        <Directory Id="AppProgramMenuFolder" Name="Remote AI IDE">
+          <Component Id="StartMenuFolder" Guid="c9d4e5f6-a7b8-9012-cdef-234567890123" Win64="yes">
+            <RegistryValue Root="HKLM"
+                           Key="Software\Remote AI IDE"
+                           Name="StartMenuInstalled"
+                           Value="1"
+                           Type="string"
+                           KeyPath="yes" />
+            <RemoveFolder Id="RemoveAppProgramMenu" On="uninstall" />
+          </Component>
+        </Directory>
+      </Directory>
+
+      <!-- Desktop shortcuts -->
+      <Directory Id="DesktopFolder" Name="Desktop" />
+
+    </Directory>
+
+    <!-- ===== Feature ===== -->
+    <Feature Id="MainFeature"
+             Title="Remote AI IDE"
+             Description="Remote AI IDE — AI-powered remote development for Windows"
+             Level="1"
+             Display="expand"
+             ConfigurableDirectory="APPLICATIONFOLDER"
+             Absent="disallow">
+      <ComponentRef Id="MainApp" />
+      <ComponentRef Id="AppIcon" />
+      <ComponentRef Id="StartMenuFolder" />
+    </Feature>
+
+    <!-- ===== Add/Remove Programs metadata ===== -->
+    <Property Id="ARPCOMMENTS" Value="AI-powered remote development for Windows" />
+    <Property Id="ARPCONTACT" Value="Remote AI IDE Team" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/user/remote-ai-ide" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/user/remote-ai-ide" />
+
+  </Product>
+</Wix>
