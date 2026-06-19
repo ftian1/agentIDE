@@ -73,7 +73,7 @@ pub fn run() {
 
             // Spawn agent message relay: polls the transport and emits Tauri events
             let handle = app_handle.clone();
-            tokio::spawn(async move {
+            tauri::async_runtime::spawn(async move {
                 relay_agent_messages(handle).await;
             });
 
