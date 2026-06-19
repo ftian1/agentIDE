@@ -52,38 +52,50 @@ pub fn run() {
 
             // Try IPC only on Linux (agent binary is always Linux).
             // On Windows/macOS, the agent runs on the remote host.
+            eprintln!("[remote-ai-ide] Step 1: checking agent transport...");
             let agent_transport: Option<Arc<dyn transport::Transport>> =
                 if cfg!(target_os = "linux") {
                     match transport::ipc::IpcTransport::spawn() {
                         Ok(t) => {
-                            tracing::info!("Local agent started via IPC ✓");
+                            eprintln!("[remote-ai-ide] Local agent started via IPC ✓");
                             Some(Arc::new(t))
                         }
                         Err(e) => {
-                            tracing::warn!("Local agent not available: {e}");
+                            eprintln!("[remote-ai-ide] Local agent not available: {e}");
                             None
                         }
                     }
                 } else {
-                    tracing::info!("Non-Linux host — agent runs on remote machine");
+                    eprintln!("[remote-ai-ide] Non-Linux host — agent runs on remote machine");
                     None
                 };
 
+            eprintln!("[remote-ai-ide] Step 2: creating connection manager...");
+            let connections = connection::manager::ConnectionManager::new(app_handle.clone());
+            eprintln!("[remote-ai-ide] Step 2 done");
+
+            eprintln!("[remote-ai-ide] Step 3: opening database...");
+            let db = store::Database::open().expect("Failed to open database");
+            eprintln!("[remote-ai-ide] Step 3 done");
+
             let state = AppState {
-                connections: connection::manager::ConnectionManager::new(app_handle.clone()),
-                db: store::Database::open().expect("Failed to open database"),
+                connections,
+                db,
                 agent_transport: tokio::sync::RwLock::new(agent_transport),
             };
 
             app.manage(state);
+            eprintln!("[remote-ai-ide] Step 4: state managed");
 
             // Spawn agent message relay: polls the transport and emits Tauri events
             let handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 relay_agent_messages(handle).await;
             });
+            eprintln!("[remote-ai-ide] Step 5: relay spawned");
 
             tracing::info!("Remote AI IDE backend initialized");
+            eprintln!("[remote-ai-ide] Setup complete ✓");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
