@@ -95,6 +95,8 @@ pub fn run() {
             commands::session::close_session,
             commands::session::resize_terminal,
             commands::session::write_input,
+            commands::session::apply_code_change,
+            commands::session::reject_code_change,
             commands::tool::probe_tool,
             commands::tool::install_tool,
         ])

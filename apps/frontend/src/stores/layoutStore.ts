@@ -5,6 +5,33 @@
  */
 import { create } from 'zustand';
 
+const LAYOUT_KEY = 'remote-ai-ide:layout';
+
+function loadPersisted(): Partial<LayoutStore> {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  return {};
+}
+
+function persistLayout(state: Partial<LayoutStore>) {
+  try {
+    const toSave: Record<string, unknown> = {};
+    for (const key of [
+      'secondarySidebarWidth',
+      'bottomPanelHeight',
+      'bottomPanelVisible',
+      'secondarySidebarVisible',
+      'bottomPanelTab',
+    ]) {
+      const k = key as keyof LayoutStore;
+      if (state[k] !== undefined) toSave[key] = state[k];
+    }
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(toSave));
+  } catch { /* ignore */ }
+}
+
 export type ActivityId = 'explorer' | 'search' | 'sourceControl' | 'settings';
 export type BottomPanelTab = 'terminal' | 'problems' | 'output' | 'codeChanges';
 
@@ -48,23 +75,44 @@ export interface LayoutStore {
   setActiveEditorTab: (id: string | null) => void;
 }
 
+const persisted = loadPersisted();
+
 export const useLayoutStore = create<LayoutStore>((set) => ({
   activeActivity: 'explorer',
   setActiveActivity: (id) => set({ activeActivity: id }),
 
-  secondarySidebarVisible: true,
-  secondarySidebarWidth: 260,
+  secondarySidebarVisible: persisted.secondarySidebarVisible ?? true,
+  secondarySidebarWidth: persisted.secondarySidebarWidth ?? 260,
   toggleSecondarySidebar: () =>
-    set((s) => ({ secondarySidebarVisible: !s.secondarySidebarVisible })),
-  setSecondarySidebarWidth: (w) => set({ secondarySidebarWidth: Math.max(200, Math.min(400, w)) }),
+    set((s) => {
+      const v = !s.secondarySidebarVisible;
+      persistLayout({ secondarySidebarVisible: v });
+      return { secondarySidebarVisible: v };
+    }),
+  setSecondarySidebarWidth: (w) => {
+    const clamped = Math.max(200, Math.min(400, w));
+    persistLayout({ secondarySidebarWidth: clamped });
+    set({ secondarySidebarWidth: clamped });
+  },
 
-  bottomPanelVisible: true,
-  bottomPanelHeight: 220,
-  bottomPanelTab: 'terminal',
-  setBottomPanelTab: (tab) => set({ bottomPanelTab: tab, bottomPanelVisible: true }),
+  bottomPanelVisible: persisted.bottomPanelVisible ?? true,
+  bottomPanelHeight: persisted.bottomPanelHeight ?? 220,
+  bottomPanelTab: (persisted.bottomPanelTab as BottomPanelTab) ?? 'terminal',
+  setBottomPanelTab: (tab) => {
+    persistLayout({ bottomPanelTab: tab });
+    set({ bottomPanelTab: tab, bottomPanelVisible: true });
+  },
   toggleBottomPanel: () =>
-    set((s) => ({ bottomPanelVisible: !s.bottomPanelVisible })),
-  setBottomPanelHeight: (h) => set({ bottomPanelHeight: Math.max(100, Math.min(600, h)) }),
+    set((s) => {
+      const v = !s.bottomPanelVisible;
+      persistLayout({ bottomPanelVisible: v });
+      return { bottomPanelVisible: v };
+    }),
+  setBottomPanelHeight: (h) => {
+    const clamped = Math.max(100, Math.min(600, h));
+    persistLayout({ bottomPanelHeight: clamped });
+    set({ bottomPanelHeight: clamped });
+  },
 
   rightPanelVisible: false,
   setRightPanelVisible: (v) => set({ rightPanelVisible: v }),

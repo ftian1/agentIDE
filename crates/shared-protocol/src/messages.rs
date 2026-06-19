@@ -42,6 +42,10 @@ pub enum ProtocolMessage {
     InstallRequest { tool: ToolKind, version: Option<String> },
     InstallProgress { tool: ToolKind, phase: String, progress: f32, message: String },
     InstallComplete { tool: ToolKind, success: bool, version: Option<String>, error: Option<String> },
+    // ── Code Change Management ───────────────────────────────
+    CodeChange { session_id: String, change_set_id: String, change_id: String, file_path: String, old_content: Option<String>, new_content: Option<String>, diff: String, seq: u64 },
+    CodeChangeBatch { session_id: String, change_set_id: String, description: String, status: String, file_count: u32 },
+    ApplyChange { session_id: String, file_path: String, content: String },
     // ── Keepalive ─────────────────────────────────────────────
     Ping { nonce: u64 },
     Pong { nonce: u64 },
@@ -74,6 +78,9 @@ impl ProtocolMessage {
             Self::InstallRequest { .. } => "install_request",
             Self::InstallProgress { .. } => "install_progress",
             Self::InstallComplete { .. } => "install_complete",
+            Self::CodeChange { .. } => "code_change",
+            Self::CodeChangeBatch { .. } => "code_change_batch",
+            Self::ApplyChange { .. } => "apply_change",
             Self::Ping { .. } => "ping",
             Self::Pong { .. } => "pong",
         }
@@ -94,7 +101,10 @@ impl ProtocolMessage {
             | Self::Ack { session_id, .. }
             | Self::Pause { session_id, .. }
             | Self::Resume { session_id }
-            | Self::SessionEvent { session_id, .. } => Some(session_id),
+            | Self::SessionEvent { session_id, .. }
+            | Self::CodeChange { session_id, .. }
+            | Self::CodeChangeBatch { session_id, .. }
+            | Self::ApplyChange { session_id, .. } => Some(session_id),
             _ => None,
         }
     }
@@ -136,6 +146,9 @@ payload_struct!(ProbeResponsePayload { tool: ToolKind, installed: bool, version:
 payload_struct!(InstallRequestPayload { tool: ToolKind, version: Option<String> });
 payload_struct!(InstallProgressPayload { tool: ToolKind, phase: String, progress: f32, message: String });
 payload_struct!(InstallCompletePayload { tool: ToolKind, success: bool, version: Option<String>, error: Option<String> });
+payload_struct!(CodeChangePayload { session_id: String, change_set_id: String, change_id: String, file_path: String, old_content: Option<String>, new_content: Option<String>, diff: String, seq: u64 });
+payload_struct!(CodeChangeBatchPayload { session_id: String, change_set_id: String, description: String, status: String, file_count: u32 });
+payload_struct!(ApplyChangePayload { session_id: String, file_path: String, content: String });
 payload_struct!(PingPayload { nonce: u64 });
 payload_struct!(PongPayload { nonce: u64 });
 
@@ -205,6 +218,12 @@ impl ProtocolMessage {
                 rmp_serde::to_vec(&InstallProgressPayload { tool: tool.clone(), phase: phase.clone(), progress: *progress, message: message.clone() }),
             Self::InstallComplete { tool, success, version, error } =>
                 rmp_serde::to_vec(&InstallCompletePayload { tool: tool.clone(), success: *success, version: version.clone(), error: error.clone() }),
+            Self::CodeChange { session_id, change_set_id, change_id, file_path, old_content, new_content, diff, seq } =>
+                rmp_serde::to_vec(&CodeChangePayload { session_id: session_id.clone(), change_set_id: change_set_id.clone(), change_id: change_id.clone(), file_path: file_path.clone(), old_content: old_content.clone(), new_content: new_content.clone(), diff: diff.clone(), seq: *seq }),
+            Self::CodeChangeBatch { session_id, change_set_id, description, status, file_count } =>
+                rmp_serde::to_vec(&CodeChangeBatchPayload { session_id: session_id.clone(), change_set_id: change_set_id.clone(), description: description.clone(), status: status.clone(), file_count: *file_count }),
+            Self::ApplyChange { session_id, file_path, content } =>
+                rmp_serde::to_vec(&ApplyChangePayload { session_id: session_id.clone(), file_path: file_path.clone(), content: content.clone() }),
             Self::Ping { nonce } =>
                 rmp_serde::to_vec(&PingPayload { nonce: *nonce }),
             Self::Pong { nonce } =>
@@ -235,6 +254,9 @@ impl ProtocolMessage {
             "install_request" => { let p: InstallRequestPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::InstallRequest { tool: p.tool, version: p.version } }
             "install_progress" => { let p: InstallProgressPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::InstallProgress { tool: p.tool, phase: p.phase, progress: p.progress, message: p.message } }
             "install_complete" => { let p: InstallCompletePayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::InstallComplete { tool: p.tool, success: p.success, version: p.version, error: p.error } }
+            "code_change" => { let p: CodeChangePayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::CodeChange { session_id: p.session_id, change_set_id: p.change_set_id, change_id: p.change_id, file_path: p.file_path, old_content: p.old_content, new_content: p.new_content, diff: p.diff, seq: p.seq } }
+            "code_change_batch" => { let p: CodeChangeBatchPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::CodeChangeBatch { session_id: p.session_id, change_set_id: p.change_set_id, description: p.description, status: p.status, file_count: p.file_count } }
+            "apply_change" => { let p: ApplyChangePayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::ApplyChange { session_id: p.session_id, file_path: p.file_path, content: p.content } }
             "ping" => { let p: PingPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::Ping { nonce: p.nonce } }
             "pong" => { let p: PongPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::Pong { nonce: p.nonce } }
             _ => return Err(format!("unknown tag: {}", tag)),
