@@ -19,7 +19,7 @@
         "minWidth": 900,
         "minHeight": 600,
         "resizable": true,
-        "center": true,
+        "maximized": true,
         "fullscreen": false,
         "visible": true,
         "backgroundColor": "#0d1117"

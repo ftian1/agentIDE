@@ -565,6 +565,46 @@ oneshot 而非轮询，延迟更低且无超时计数 hack。**未验证项：**
 
 ---
 
+### 4.23 文件加载提速 / 文件树体验 / git 分支切换 / 面板缩放 / 终端宽度
+
+一批体验改进。
+
+**① 窗口默认最大化：** §4.22 为消闪烁去掉了 maximized，但用户要默认最大化。改回 `maximized:true` —— 因窗口
+已 `visible:true` + 深色 `backgroundColor`，从默认尺寸到最大化的跳变发生在深色表面上，几乎不可见。
+
+**② 文件打开慢（数秒）→ Monaco 本地化（根因级）：** `@monaco-editor/react` 默认从 jsdelivr **CDN 联网下载整个
+Monaco 引擎（数 MB）**，桌面 app 每次首开编辑器都要联网 → 慢，离线直接失败。修复：新增 `lib/monacoSetup.ts`，
+`loader.config({ monaco })` 指向**本地 bundle**（monaco-editor@0.55.1 已作为传递依赖在 node_modules），并配置
+Vite `?worker` 把 5 个 Monaco worker 打进应用。`vendor-monaco` chunk 从 21KB → 4.2MB（引擎真正入包），exe
+从 13MB → 15.8MB。**注意：** pnpm store 当时处于迁移损坏态，无法 `pnpm add`，故未在 package.json 声明
+monaco-editor，靠顶层软链 `node_modules/monaco-editor → .pnpm/...` 解析（pnpm install 会自然重建该链）。
+
+**③ 文件树体验：**
+- **Refresh 图标化**：删除原单独一行的 "Refresh" 文字按钮，改为 header 行右侧的刷新图标，与标题/git 分支并齐。
+- **展开延迟消除**：根因是 `handleToggle` 在 collapse 时把 `children` 置 `undefined`，重新展开又得 `listFiles`。
+  改为 `TreeNode` 加显式 `expanded` 字段，与 children 缓存**解耦**——collapse 只翻 `expanded:false` 保留缓存，
+  重新展开瞬时（不重新 list）。
+
+**④ git 分支显示 + 下拉切换：** 新增后端 `git_branches`（单次 exec：判仓库 + 当前分支 + `for-each-ref` 列本地分支）
+与 `git_checkout`（`git checkout`，检测 error:/fatal: 报错）两命令。前端 `GitBranchDropdown` 在 explorer header：
+非 git 仓库不渲染；是仓库则显示当前分支,点开列所有本地分支可切换，切换后刷新文件树。checkout 走临时文件外的
+普通命令——若工作区有未提交改动导致 checkout 失败，错误回传到下拉里显示。
+
+**⑤ 面板缩放 + 原生终端宽度（错行修复）：**
+- AppShell.AgentColumn 从固定 `w-96` 改为**可拖拽缩放**（左边缘 handle）+ 宽度持久化（`agentColumnWidth`）；
+  修了 SecondarySidebar resize handle 的定位 bug（容器加 `relative`、handle 加宽到 1.5）。
+- **原生终端错行根因**：agent CLI TUI 需 ≥80 列，而旧默认右栏 384px≈48 列 → 必然 wrap 错行。把 `agentColumnWidth`
+  默认提到 **720px**、下限 **660px**（80 列 ×≈8.4px/列 + padding）。
+- **另一隐藏 bug**：原生终端默认在 hidden tab（`display:none`），xterm 量不到尺寸 → fit 出错列数。给
+  `TerminalInstance` 加 `active` prop，切到 raw tab 变 active 时双 rAF 后 refit + 向 PTY 发 resize，使 CLI 按正确
+  列数重渲染。
+
+**取舍 / 未做：** 用户要的「面板拖拽**重排位置**」（dock）是独立大工程（需引入 dockview/react-mosaic 并把 AppShell
+槽位重构为动态布局），风险高，**本轮只做缩放**，重排留作后续（见 TODO）。RightPanel(SessionDetail) 暂未加缩放
+（次要面板）。**未验证项：** 本环境无法跑 exe，文件打开提速、git 切换、终端宽度/错行、缩放手感均需真机验证。
+
+---
+
 ## 5. 关键文件索引
 
 | 组件 | 路径 |

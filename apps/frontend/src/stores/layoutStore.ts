@@ -26,6 +26,7 @@ function persistLayout(state: Partial<LayoutStore>) {
       'bottomPanelTab',
       'topBarVisible',
       'agentPanelVisible',
+      'agentColumnWidth',
     ]) {
       const k = key as keyof LayoutStore;
       if (state[k] !== undefined) toSave[key] = state[k];
@@ -91,6 +92,8 @@ export interface LayoutStore {
   // Agent panel (right-side Claude Code conversation)
   agentPanelVisible: boolean;
   toggleAgentPanel: () => void;
+  agentColumnWidth: number;
+  setAgentColumnWidth: (w: number) => void;
 
   // Editor tabs
   editorTabs: EditorTab[];
@@ -172,6 +175,15 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
       persistLayout({ agentPanelVisible: v });
       return { agentPanelVisible: v };
     }),
+  agentColumnWidth: persisted.agentColumnWidth ?? 720,
+  setAgentColumnWidth: (w) => {
+    // Lower bound ~660px so the native agent terminal keeps ≥80 columns at the
+    // 14px monospace font (≈8.4px/col + padding) — below that the CLI TUI wraps
+    // and renders garbled ("错行"). Upper bound leaves room for the editor.
+    const clamped = Math.max(660, Math.min(1100, w));
+    persistLayout({ agentColumnWidth: clamped });
+    set({ agentColumnWidth: clamped });
+  },
 
   editorTabs: [],
   activeEditorTabId: null,

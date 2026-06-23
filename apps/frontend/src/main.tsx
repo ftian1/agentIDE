@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './App';
 import './styles/index.css';
+import './lib/monacoSetup';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { initApprovalListeners } from './stores/approvalStore';
 import { initAgentListeners } from './stores/agentStore';

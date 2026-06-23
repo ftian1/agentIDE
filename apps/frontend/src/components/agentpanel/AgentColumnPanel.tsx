@@ -47,7 +47,7 @@ export function AgentColumnPanel() {
         </div>
         <div className={`absolute inset-0 bg-bg-primary ${tab === 'raw' ? '' : 'hidden'}`}>
           {activeSessionId ? (
-            <TerminalInstance key={activeSessionId} sessionId={activeSessionId} api={api} />
+            <TerminalInstance key={activeSessionId} sessionId={activeSessionId} api={api} active={tab === 'raw'} />
           ) : (
             <div className="flex items-center justify-center h-full">
               <p className="text-xs text-text-secondary italic">无活动会话</p>

@@ -41,15 +41,14 @@ export function SecondarySidebar({ children }: Props) {
 
   return (
     <div
-      className="flex-shrink-0 bg-bg-secondary border-r border-border flex flex-col overflow-hidden"
+      className="relative flex-shrink-0 bg-bg-secondary border-r border-border flex flex-col overflow-hidden"
       style={{ width }}
     >
       {children}
-      {/* Resize handle */}
+      {/* Resize handle (right edge) */}
       <div
         onMouseDown={onMouseDown}
-        className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-accent/30 transition-colors z-10"
-        style={{ marginRight: -1 }}
+        className="absolute right-0 top-0 bottom-0 w-1.5 -mr-0.5 cursor-col-resize hover:bg-accent/30 transition-colors z-10"
       />
     </div>
   );

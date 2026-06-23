@@ -1,8 +1,10 @@
 import type { ReactNode } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import { ActivityBar } from '../activity/ActivityBar';
 import { SecondarySidebar } from './SecondarySidebar';
 import { EditorTabBar } from './EditorTabBar';
 import { BottomPanel } from './BottomPanel';
+import { useLayoutStore } from '../../stores/layoutStore';
 
 interface AppShellProps {
   children: ReactNode;
@@ -115,8 +117,40 @@ function StatusBar({ children }: { children: ReactNode }) {
 }
 
 function AgentColumn({ children }: { children: ReactNode }) {
+  const width = useLayoutStore((s) => s.agentColumnWidth);
+  const setWidth = useLayoutStore((s) => s.setAgentColumnWidth);
+  const resizing = useRef(false);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    resizing.current = true;
+  }, []);
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!resizing.current) return;
+      // Right-docked column: width grows as the cursor moves left.
+      setWidth(window.innerWidth - e.clientX);
+    };
+    const onUp = () => { resizing.current = false; };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [setWidth]);
+
   return (
-    <aside className="w-96 flex-shrink-0 bg-bg-secondary border-l border-border flex flex-col">
+    <aside
+      className="relative flex-shrink-0 bg-bg-secondary border-l border-border flex flex-col"
+      style={{ width }}
+    >
+      {/* Resize handle (left edge) */}
+      <div
+        onMouseDown={onMouseDown}
+        className="absolute left-0 top-0 bottom-0 w-1.5 -ml-0.5 cursor-col-resize hover:bg-accent/30 transition-colors z-10"
+      />
       {children}
     </aside>
   );

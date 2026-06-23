@@ -131,6 +131,98 @@ pub async fn write_file(
     Ok(())
 }
 
+/// Git branch info for a directory: current branch + all local branches.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchInfo {
+    /// True if `dir` is inside a git work tree.
+    pub is_repo: bool,
+    /// Current branch name (empty if detached/not a repo).
+    pub current: String,
+    /// All local branch names.
+    pub branches: Vec<String>,
+}
+
+/// Query git branch state for a directory on the remote machine.
+#[tauri::command]
+pub async fn git_branches(
+    state: State<'_, AppState>,
+    connection_id: String,
+    path: String,
+) -> Result<GitBranchInfo, String> {
+    let session_ref = state
+        .ssh_sessions
+        .get(&connection_id)
+        .ok_or_else(|| format!("Connection not found: {}", connection_id))?;
+    let ssh_arc = session_ref.value().clone();
+
+    // One round-trip: check repo, print current branch, then list locals.
+    // Markers keep the sections unambiguous.
+    let dir = shell_quote(&path);
+    let cmd = format!(
+        "cd {dir} 2>/dev/null || exit 0; \
+         git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0; \
+         echo __REPO__; \
+         echo \"CUR=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)\"; \
+         echo __BRANCHES__; \
+         git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null"
+    );
+    let raw = crate::connection::ssh::exec_remote(ssh_arc.as_ref(), &cmd)
+        .await
+        .map_err(|e| format!("git query failed: {e}"))?;
+
+    if !raw.contains("__REPO__") {
+        return Ok(GitBranchInfo { is_repo: false, current: String::new(), branches: vec![] });
+    }
+
+    let mut current = String::new();
+    let mut branches = Vec::new();
+    let mut in_branches = false;
+    for line in raw.lines() {
+        let line = line.trim();
+        if line == "__REPO__" { continue; }
+        if line == "__BRANCHES__" { in_branches = true; continue; }
+        if let Some(cur) = line.strip_prefix("CUR=") {
+            current = cur.to_string();
+        } else if in_branches && !line.is_empty() {
+            branches.push(line.to_string());
+        }
+    }
+
+    Ok(GitBranchInfo { is_repo: true, current, branches })
+}
+
+/// Check out a different branch in a directory on the remote machine.
+#[tauri::command]
+pub async fn git_checkout(
+    state: State<'_, AppState>,
+    connection_id: String,
+    path: String,
+    branch: String,
+) -> Result<(), String> {
+    let session_ref = state
+        .ssh_sessions
+        .get(&connection_id)
+        .ok_or_else(|| format!("Connection not found: {}", connection_id))?;
+    let ssh_arc = session_ref.value().clone();
+
+    let cmd = format!(
+        "cd {} && git checkout {} 2>&1",
+        shell_quote(&path),
+        shell_quote(&branch),
+    );
+    let out = crate::connection::ssh::exec_remote(ssh_arc.as_ref(), &cmd)
+        .await
+        .map_err(|e| format!("checkout failed: {e}"))?;
+
+    // git prints "Switched to branch" / "Already on" on success; "error:" on
+    // failure (e.g. uncommitted changes would be overwritten).
+    if out.contains("error:") || out.contains("fatal:") {
+        return Err(out.trim().to_string());
+    }
+    Ok(())
+}
+
 /// Single-quote a string for safe POSIX shell interpolation.
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))

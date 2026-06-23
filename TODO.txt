@@ -161,6 +161,22 @@
 
 ## Frontend
 
+### ✅ 体验批次:窗口最大化/Monaco本地化/文件树/git分支/面板缩放 (design.md §4.23)
+- ✅ 窗口默认最大化(maximized:true,深色背景下跳变不可见)
+- ✅ 文件打开慢→Monaco 本地化:lib/monacoSetup.ts loader.config 指向本地 bundle + Vite worker 打包
+  (vendor-monaco 21KB→4.2MB,exe 13→15.8MB);pnpm store 损坏期靠顶层软链解析
+- ✅ 文件树:Refresh 改 header 图标;展开延迟消除(TreeNode 加 expanded 字段,collapse 不清 children 缓存)
+- ✅ git 分支:后端 git_branches/git_checkout 命令 + 前端 GitBranchDropdown(显示当前分支+下拉切换+切后刷新)
+- ✅ 面板缩放:AgentColumn 可拖拽缩放+持久化(agentColumnWidth);修 SecondarySidebar handle 定位 bug
+- ✅ 原生终端错行:默认宽度 384→720px(下限 660,≥80 列);TerminalInstance 加 active prop,切 raw tab 后
+  refit+PTY resize(修 hidden tab 量不到尺寸导致列数错的隐藏 bug)
+- ⬜ 真机验证:文件打开提速、git 切换、终端宽度/错行、缩放手感
+
+### ⬜ 面板拖拽重排位置(dock)——用户已要求,本轮只做了缩放
+- 需引入 dockview 或 react-mosaic,把 AppShell 固定槽位重构为动态布局
+- 大工程、风险高,缩放已先交付;重排作为独立下一步
+- 另:RightPanel(SessionDetail) 暂未加缩放(次要面板),可一并补
+
 ### ✅ 三连 bug 修复:文件打开 + 多会话终端 + 启动闪烁（design.md §4.22）
 - ✅ Bug1 双击文件打不开:FileBrowser 文件点击补 onOpenFile → addEditorTab,中间 CodeEditor 渲染
 - ✅ Bug2+3 原生终端不 dump TUI / 底部 bash 不可交互:根因是多 session 各起 relay 抢单消费者 recv()。

@@ -7,7 +7,7 @@
  *  - Shows ".." entry for parent navigation
  *  - Sorts directories first, then files, alphabetically
  */
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   ChevronRight,
   ChevronDown,
@@ -17,11 +17,16 @@ import {
   FolderTree,
   RefreshCw,
   CornerLeftUp,
+  GitBranch,
+  Check,
 } from 'lucide-react';
 import { useConnectionStore } from '../../stores/connectionStore';
 import { useLayoutStore } from '../../stores/layoutStore';
 import { useTerminalApi } from '../../hooks/useTerminalApi';
+import { createFileApi, type FileApi, type GitBranchInfo } from '../../api/fileApi';
 import type { FileEntry } from '../../api/terminalApi';
+
+const fileApi: FileApi = createFileApi();
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -32,8 +37,10 @@ interface TreeNode {
   path: string;
   kind: 'file' | 'directory';
   children?: TreeNode[];
-  loaded?: boolean;   // true once children have been fetched
+  loaded?: boolean;   // true once children have been fetched (cached)
   loading?: boolean;  // true while fetch is in flight
+  expanded?: boolean; // UI expand state — decoupled from children cache so
+                      // collapse/expand doesn't refetch.
 }
 
 /* ------------------------------------------------------------------ */
@@ -52,7 +59,7 @@ function FileTreeRow({
   onOpenFile: (node: TreeNode) => void;
 }) {
   const isDir = node.kind === 'directory';
-  const expanded = isDir && node.loaded && (node.children?.length ?? 0) > 0;
+  const expanded = !!(isDir && node.expanded);
 
   const handleClick = useCallback(() => {
     if (isDir) onToggle(node);
@@ -137,6 +144,9 @@ export function FileBrowser() {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [initialLoaded, setInitialLoaded] = useState(false);
 
+  // The directory the tree is currently rooted at — used for git queries.
+  const currentDir = tree[0]?.path ?? null;
+
   // Load initial directory on connect
   useEffect(() => {
     if (!connected || !activeConn) {
@@ -159,6 +169,7 @@ export function FileBrowser() {
             kind: e.kind as 'file' | 'directory',
           })),
           loaded: true,
+          expanded: true,
         };
         setTree([node]);
         setInitialLoaded(true);
@@ -196,6 +207,7 @@ export function FileBrowser() {
               kind: e.kind as 'file' | 'directory',
             })),
             loaded: true,
+            expanded: true,
           };
           setTree([parentNode]);
         } catch (err) {
@@ -204,17 +216,17 @@ export function FileBrowser() {
         return;
       }
 
-      // If already loaded, just toggle (collapse by clearing children reference)
+      // Already loaded → just flip expand state. Children stay cached, so
+      // re-expanding is instant (no refetch — that was the "refresh lag").
       if (node.loaded) {
         setTree((prev) => updateNode(prev, node.path, (n) => ({
           ...n,
-          loaded: false,
-          children: undefined,
+          expanded: !n.expanded,
         })));
         return;
       }
 
-      // Mark loading
+      // First expand of this dir → fetch children, then expand.
       setTree((prev) => updateNode(prev, node.path, (n) => ({ ...n, loading: true })));
 
       try {
@@ -239,6 +251,7 @@ export function FileBrowser() {
             children,
             loaded: true,
             loading: false,
+            expanded: true,
           }))
         );
       } catch (err) {
@@ -265,36 +278,40 @@ export function FileBrowser() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-3 border-b border-border">
-        <FolderTree size={14} className="text-accent" />
-        <span className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
-          File Explorer
+      {/* Header: title + git branch dropdown + refresh icon, all on one row */}
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
+        <FolderTree size={14} className="text-accent flex-shrink-0" />
+        <span className="text-xs font-semibold text-text-secondary uppercase tracking-wider flex-shrink-0">
+          Explorer
         </span>
+        <div className="flex-1 min-w-0 flex justify-end">
+          {activeConn && connected && currentDir && (
+            <GitBranchDropdown
+              connectionId={activeConn.id}
+              dir={currentDir}
+              onChanged={() => setInitialLoaded(false)}
+            />
+          )}
+        </div>
+        {connected && (
+          <button
+            onClick={() => setInitialLoaded(false)}
+            className="p-1 rounded text-text-secondary hover:text-text-primary hover:bg-bg-tertiary transition-colors flex-shrink-0"
+            title="Refresh file tree"
+          >
+            <RefreshCw size={12} />
+          </button>
+        )}
       </div>
 
       {/* Connection info + current path */}
       {activeConn && connected && tree.length > 0 && (
         <div className="px-3 py-1.5 border-b border-border bg-bg-tertiary/50">
-          <p className="text-[10px] text-text-secondary">
+          <p className="text-[10px] text-text-secondary truncate">
             <span className="text-accent">{activeConn.user}@{activeConn.host}</span>
             {' — '}
             <span className="text-text-primary font-mono">{tree[0].path}</span>
           </p>
-        </div>
-      )}
-
-      {/* Refresh button */}
-      {connected && (
-        <div className="px-3 py-1 border-b border-border">
-          <button
-            onClick={() => { setInitialLoaded(false); }}
-            className="flex items-center gap-1 text-[10px] text-text-secondary hover:text-text-primary transition-colors"
-            title="Refresh file tree"
-          >
-            <RefreshCw size={10} />
-            Refresh
-          </button>
         </div>
       )}
 
@@ -338,4 +355,107 @@ function updateNode(
     }
     return n;
   });
+}
+
+/* ------------------------------------------------------------------ */
+/*  GitBranchDropdown                                                  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Shows the current git branch of the explorer's root dir (if it's a repo) as
+ * a dropdown that lets the user check out a different local branch. Renders
+ * nothing when the directory isn't a git repository.
+ */
+function GitBranchDropdown({
+  connectionId,
+  dir,
+  onChanged,
+}: {
+  connectionId: string;
+  dir: string;
+  onChanged: () => void;
+}) {
+  const [info, setInfo] = useState<GitBranchInfo | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // (Re)load branch info whenever the root dir changes.
+  useEffect(() => {
+    let cancelled = false;
+    fileApi.gitBranches(connectionId, dir)
+      .then((i) => { if (!cancelled) setInfo(i); })
+      .catch(() => { if (!cancelled) setInfo(null); });
+    return () => { cancelled = true; };
+  }, [connectionId, dir]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  if (!info?.isRepo) return null;
+
+  const checkout = async (branch: string) => {
+    if (branch === info.current || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await fileApi.gitCheckout(connectionId, dir, branch);
+      const next = await fileApi.gitBranches(connectionId, dir);
+      setInfo(next);
+      setOpen(false);
+      onChanged(); // refresh the file tree against the new branch
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="relative min-w-0" ref={ref}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        disabled={busy}
+        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-text-secondary
+                   hover:text-text-primary hover:bg-bg-tertiary transition-colors max-w-[140px]"
+        title={`Git branch: ${info.current} — click to switch`}
+      >
+        <GitBranch size={11} className="flex-shrink-0" />
+        <span className="truncate">{busy ? '切换中…' : info.current || '(detached)'}</span>
+        <ChevronDown size={10} className={`flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1 w-56 max-h-72 overflow-y-auto z-50
+                        bg-bg-secondary border border-border rounded shadow-lg py-1">
+          <div className="px-3 py-1 text-[10px] uppercase tracking-wider text-text-secondary border-b border-border/60">
+            切换分支 · {info.branches.length}
+          </div>
+          {error && (
+            <div className="px-3 py-1.5 text-[10px] text-red-400 break-words">{error}</div>
+          )}
+          {info.branches.map((b) => (
+            <button
+              key={b}
+              onClick={() => checkout(b)}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left
+                         text-text-primary hover:bg-bg-tertiary transition-colors"
+            >
+              <span className="w-3.5 flex-shrink-0">
+                {b === info.current && <Check size={12} className="text-green-400" />}
+              </span>
+              <span className="truncate">{b}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }

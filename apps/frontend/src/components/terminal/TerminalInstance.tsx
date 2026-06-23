@@ -17,9 +17,16 @@ interface Props {
   api: TerminalApi;
   /** Called when the terminal is ready with initial dimensions. */
   onReady?: (cols: number, rows: number) => void;
+  /**
+   * Whether this terminal is currently visible. When it lives in a hidden tab,
+   * xterm can't measure its container (size 0) so fit() computes wrong columns
+   * and the agent CLI TUI wraps/garbles. Flipping this to true triggers a
+   * refit + PTY resize once the container has real dimensions.
+   */
+  active?: boolean;
 }
 
-export function TerminalInstance({ sessionId, api, onReady }: Props) {
+export function TerminalInstance({ sessionId, api, onReady, active = true }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -116,6 +123,24 @@ export function TerminalInstance({ sessionId, api, onReady }: Props) {
     if (container) observer.observe(container);
     return () => observer.disconnect();
   }, [handleResize]);
+
+  // When the terminal becomes visible (e.g. switching to the raw tab), its
+  // container finally has real dimensions — refit and push the new size to the
+  // PTY so the agent CLI re-renders at the correct column count.
+  useEffect(() => {
+    if (!active) return;
+    // Double rAF: wait for the unhide to take layout effect before measuring.
+    const id = requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        try {
+          fitAddonRef.current?.fit();
+          const term = terminalRef.current;
+          if (term) api.resize(sessionId, term.cols, term.rows);
+        } catch {}
+      }),
+    );
+    return () => cancelAnimationFrame(id);
+  }, [active, api, sessionId]);
 
   return (
     <div

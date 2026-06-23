@@ -184,6 +184,8 @@ pub fn run() {
             commands::files::list_files,
             commands::files::read_file,
             commands::files::write_file,
+            commands::files::git_branches,
+            commands::files::git_checkout,
             commands::session::spawn_session,
             commands::session::close_session,
             commands::session::resize_terminal,
