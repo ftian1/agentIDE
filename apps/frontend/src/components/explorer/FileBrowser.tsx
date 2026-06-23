@@ -19,6 +19,7 @@ import {
   CornerLeftUp,
 } from 'lucide-react';
 import { useConnectionStore } from '../../stores/connectionStore';
+import { useLayoutStore } from '../../stores/layoutStore';
 import { useTerminalApi } from '../../hooks/useTerminalApi';
 import type { FileEntry } from '../../api/terminalApi';
 
@@ -43,17 +44,20 @@ function FileTreeRow({
   node,
   depth,
   onToggle,
+  onOpenFile,
 }: {
   node: TreeNode;
   depth: number;
   onToggle: (node: TreeNode) => void;
+  onOpenFile: (node: TreeNode) => void;
 }) {
   const isDir = node.kind === 'directory';
   const expanded = isDir && node.loaded && (node.children?.length ?? 0) > 0;
 
   const handleClick = useCallback(() => {
     if (isDir) onToggle(node);
-  }, [isDir, node, onToggle]);
+    else onOpenFile(node);
+  }, [isDir, node, onToggle, onOpenFile]);
 
   const isParentNav = node.name === '..';
 
@@ -106,6 +110,7 @@ function FileTreeRow({
               node={child}
               depth={depth + 1}
               onToggle={onToggle}
+              onOpenFile={onOpenFile}
             />
           ))}
         </>
@@ -122,6 +127,7 @@ export function FileBrowser() {
   const connections = useConnectionStore((s) => s.connections);
   const activeConnectionId = useConnectionStore((s) => s.activeConnectionId);
   const activeConn = activeConnectionId ? connections[activeConnectionId] : null;
+  const addEditorTab = useLayoutStore((s) => s.addEditorTab);
   const api = useTerminalApi();
 
   const connected = activeConn?.status === 'connected';
@@ -243,6 +249,20 @@ export function FileBrowser() {
     [activeConn, api]
   );
 
+  // Open a file into the center editor as a 'file' editor tab.
+  const handleOpenFile = useCallback(
+    (node: TreeNode) => {
+      if (!activeConn) return;
+      addEditorTab({
+        id: `file:${activeConn.id}:${node.path}`,
+        filePath: node.path,
+        label: node.name,
+        connectionId: activeConn.id,
+      });
+    },
+    [activeConn, addEditorTab],
+  );
+
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -287,6 +307,7 @@ export function FileBrowser() {
               node={node}
               depth={0}
               onToggle={handleToggle}
+              onOpenFile={handleOpenFile}
             />
           ))
         ) : (

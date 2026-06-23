@@ -35,7 +35,7 @@ function persistLayout(state: Partial<LayoutStore>) {
 }
 
 export type ActivityId = 'agentManager' | 'explorer' | 'sessionManager' | 'search' | 'approvals' | 'tools' | 'sourceControl' | 'settings';
-export type BottomPanelTab = 'agentStdout' | 'mcpLogs' | 'fileSync' | 'problems' | 'ports';
+export type BottomPanelTab = 'terminal' | 'agentStdout' | 'mcpLogs' | 'fileSync' | 'problems' | 'ports';
 export type ModalId = 'agentBackend';
 
 export interface EditorTab {
@@ -137,9 +137,9 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
   bottomPanelVisible: persisted.bottomPanelVisible ?? true,
   bottomPanelHeight: persisted.bottomPanelHeight ?? 220,
   bottomPanelTab: (() => {
-    const valid: BottomPanelTab[] = ['agentStdout', 'mcpLogs', 'fileSync', 'problems', 'ports'];
+    const valid: BottomPanelTab[] = ['terminal', 'agentStdout', 'mcpLogs', 'fileSync', 'problems', 'ports'];
     const p = persisted.bottomPanelTab as BottomPanelTab | undefined;
-    return p && valid.includes(p) ? p : 'agentStdout';
+    return p && valid.includes(p) ? p : 'terminal';
   })(),
   setBottomPanelTab: (tab) => {
     persistLayout({ bottomPanelTab: tab });

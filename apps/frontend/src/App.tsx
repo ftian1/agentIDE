@@ -11,6 +11,7 @@ import { ConnectionBadge } from './components/status/ConnectionBadge';
 import { ApprovalQueue } from './components/approval/ApprovalQueue';
 import { CodeEditor } from './components/editor/CodeEditor';
 import { AgentStdout } from './components/bottom/AgentStdout';
+import { BottomTerminal } from './components/bottom/BottomTerminal';
 import { McpLogs, FileSyncPanel, PortsPanel } from './components/bottom/BottomPanels';
 import { useLayoutStore } from './stores/layoutStore';
 import { useWorkspaceView, useConnectionBootstrap } from './hooks/useWorkspaceView';
@@ -21,7 +22,7 @@ const CodeChangesSidebar = lazy(() =>
 const CodeChangeEditor = lazy(() =>
   import('./components/changes/CodeChangeEditor').then(m => ({ default: m.CodeChangeEditor })));
 // TerminalPane is NOT lazy — needed immediately when session spawns (race with relay events)
-import { AgentTerminalColumn } from './components/terminal/AgentTerminalColumn';
+import { AgentColumnPanel } from './components/agentpanel/AgentColumnPanel';
 import { TerminalDebugOverlay } from './components/debug/TerminalDebugOverlay';
 const SessionDetail = lazy(() =>
   import('./components/detail/SessionDetail').then(m => ({ default: m.SessionDetail })));
@@ -116,24 +117,37 @@ export function App() {
   }, [activeActivity]);
 
   const bottomContent = useMemo(() => {
-    switch (bottomPanelTab) {
-      case 'agentStdout':
-        return <AgentStdout />;
-      case 'mcpLogs':
-        return <McpLogs />;
-      case 'fileSync':
-        return <FileSyncPanel />;
-      case 'ports':
-        return <PortsPanel />;
-      case 'problems':
-        return (
-          <div className="flex items-center justify-center h-full">
-            <p className="text-xs text-text-secondary italic">No problems detected.</p>
-          </div>
-        );
-      default:
-        return null;
-    }
+    // The bash terminal stays mounted across tab switches (hidden when inactive)
+    // so its session scrollback survives. Other tabs render only when active.
+    const other = (() => {
+      switch (bottomPanelTab) {
+        case 'agentStdout':
+          return <AgentStdout />;
+        case 'mcpLogs':
+          return <McpLogs />;
+        case 'fileSync':
+          return <FileSyncPanel />;
+        case 'ports':
+          return <PortsPanel />;
+        case 'problems':
+          return (
+            <div className="flex items-center justify-center h-full">
+              <p className="text-xs text-text-secondary italic">No problems detected.</p>
+            </div>
+          );
+        default:
+          return null;
+      }
+    })();
+
+    return (
+      <div className="relative h-full">
+        <div className={`absolute inset-0 ${bottomPanelTab === 'terminal' ? '' : 'hidden'}`}>
+          <BottomTerminal />
+        </div>
+        {bottomPanelTab !== 'terminal' && <div className="absolute inset-0">{other}</div>}
+      </div>
+    );
   }, [bottomPanelTab]);
 
   const mainContent = useMemo(() => {
@@ -185,7 +199,7 @@ export function App() {
         agentPanel={
           showChrome && agentPanelVisible ? (
             <AppShell.AgentColumn>
-              <AgentTerminalColumn />
+              <AgentColumnPanel />
             </AppShell.AgentColumn>
           ) : undefined
         }

@@ -26,6 +26,12 @@ pub struct AppState {
     /// Per-connection SSH sessions: connection_id → session.
     /// Used by list_files to run shell commands on the remote host.
     pub ssh_sessions: dashmap::DashMap<String, std::sync::Arc<connection::ssh::SshSession>>,
+    /// Pending spawn-ack waiters: session_id → oneshot sender.
+    /// A single per-connection demux relay owns each transport's recv() and
+    /// fires the matching waiter when a SpawnSessionAck/Nack arrives — so
+    /// spawn_session never competes with the relay for the recv() stream.
+    /// Ok((pid, tool_version)) on ack, Err(reason) on nack.
+    pub pending_acks: dashmap::DashMap<String, tokio::sync::oneshot::Sender<Result<(u32, Option<String>), String>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +132,7 @@ pub fn run() {
                 }
             }
 
+            let agent_transport_for_relay = agent_transport.clone();
             let state = AppState {
                 connections,
                 db,
@@ -133,17 +140,22 @@ pub fn run() {
                 connection_transports: dashmap::DashMap::new(),
                 session_connections: dashmap::DashMap::new(),
                 ssh_sessions: dashmap::DashMap::new(),
+                pending_acks: dashmap::DashMap::new(),
             };
 
             app.manage(state);
             eprintln!("[remote-ai-ide] Step 4: state managed");
 
-            // Spawn agent message relay: polls the transport and emits Tauri events
-            let handle = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                relay_agent_messages(handle).await;
-            });
-            eprintln!("[remote-ai-ide] Step 5: relay spawned");
+            // For the local IPC agent (Linux), run the same per-connection demux
+            // relay so its recv() stream is owned and acks/output are fanned out.
+            // SSH connections spawn their own relay in the connect command.
+            if let Some(t) = agent_transport_for_relay {
+                let handle = app_handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    commands::session::connection_demux_relay(t, handle, "local".to_string()).await;
+                });
+                eprintln!("[remote-ai-ide] Step 5: local agent demux relay spawned");
+            }
 
             // Log WebView lifecycle for debugging renderer crashes
             if let Some(window) = app_handle.get_webview_window("main") {
@@ -156,20 +168,6 @@ pub fn run() {
                             eprintln!("[remote-ai-ide] Window Destroyed");
                         }
                         _ => {}
-                    }
-                });
-
-                // Window is created hidden (visible:false) to avoid the white
-                // flash during WebView2 cold start. The frontend calls show()
-                // once it has painted the dark UI. This timer is a safety net:
-                // if the frontend never signals (crash, load failure), show the
-                // window anyway so the user is never stuck with no window.
-                let fallback = window.clone();
-                tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                    if !fallback.is_visible().unwrap_or(true) {
-                        eprintln!("[remote-ai-ide] Fallback: showing window after timeout");
-                        let _ = fallback.show();
                     }
                 });
             }
@@ -201,19 +199,4 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-/// Background task that polls the agent transport and emits Tauri events.
-async fn relay_agent_messages(_app_handle: tauri::AppHandle) {
-    // We need to access the transport. Since it's in AppState and we can't
-    // easily get State from a spawned task, we use a polling approach
-    // with Tauri's state API via commands. For now, the session commands
-    // will handle message relay directly.
-    //
-    // This task exists as a placeholder for the full agent message relay
-    // that will be implemented when we add persistent transport polling.
-    tracing::debug!("Agent message relay task started");
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    }
 }

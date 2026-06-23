@@ -102,8 +102,13 @@ pub fn run_pty_loop(
     let sid = session_id.clone();
 
     // Agent-stream parsing: only agent CLIs emit stream-json worth parsing.
-    // Bash/shell sessions produce raw terminal output only.
-    let parse_agent = matches!(session.tool, ToolKind::Claude | ToolKind::Custom(_));
+    // Bash/shell sessions produce raw terminal output only — a Custom tool
+    // literally named "bash"/"sh" is the user's interactive shell, not an agent.
+    let parse_agent = match &session.tool {
+        ToolKind::Claude => true,
+        ToolKind::Custom(name) => !matches!(name.as_str(), "bash" | "sh" | "zsh" | "fish"),
+        _ => false,
+    };
     let parse_tx = transport_tx.clone();
 
     let read_handle = std::thread::spawn(move || {

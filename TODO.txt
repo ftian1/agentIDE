@@ -161,6 +161,13 @@
 
 ## Frontend
 
+### ✅ 三连 bug 修复:文件打开 + 多会话终端 + 启动闪烁（design.md §4.22）
+- ✅ Bug1 双击文件打不开:FileBrowser 文件点击补 onOpenFile → addEditorTab,中间 CodeEditor 渲染
+- ✅ Bug2+3 原生终端不 dump TUI / 底部 bash 不可交互:根因是多 session 各起 relay 抢单消费者 recv()。
+  改 per-connection 单一 demux relay(按 session_id fan-out)+ spawn 用 pending_acks oneshot 等 ack
+- ✅ Bug4 启动闪烁:maximized 尺寸跳变 → 改 1600×1000 + center,删 lib.rs 过时 fallback 定时器
+- ⬜ 真机验证:agent + bash 多会话并发的终端行为、文件打开、闪烁消除仅过编译,需真机确认
+
 ### ✅ 启动黑屏修复（design.md §4.19）
 - 根因：§4.16 白屏修复把"窗口可见"耦合到"JS 成功"，启动期任何崩溃 → 永久黑屏掩盖真实错误
 - ✅ tauri.conf.json 改回 visible:true（保留深色 backgroundColor 仍防白闪）
@@ -168,11 +175,14 @@
 - ✅ main.tsx 移除 getCurrentWindow().show() 与 window 静态 import；init listeners 各包 safeInit try/catch
 - ⬜ 真机验证：本环境无法跑 Windows exe，只保证故障模式从"黑屏"变"错误屏"；若仍异常，按错误屏堆栈定位
 
-### ⬜ 重做"终端归位"（上一轮成果被工作区回退弄丢，design.md §4.19 旧版）
-- 丢失文件：agentpanel/AgentColumnPanel.tsx（右列双标签 视觉交互层/原生终端）、bottom/BottomTerminal.tsx（底部用户 bash）
-- 回退后状态：App.tsx 仍引用 AgentTerminalColumn（已复活），右列=纯终端列，底部无 bash 终端标签
-- 需重做：右列双标签 + 底部 Bash 终端标签 + PanelTabBar 加 'terminal' + pty/worker.rs parse_agent 排除 bash/sh/zsh/fish
-- 注意：contextFileStore/perfStore/lib/diff.ts/CodeChangeEditor 等仍在，未丢
+### ✅ 重做"终端归位"（§4.19 工作区回退丢失后重建，design.md §4.21）
+- ✅ bottom/BottomTerminal.tsx 重建：底部"终端"标签=用户独立 bash 会话，直接 api.spawn 不走 sessionStore
+  （修正旧 terminal/BottomTerminal.tsx 用 sessionStore.spawn 篡夺 activeSessionId 的隐患，已删旧版）
+- ✅ agentpanel/AgentColumnPanel.tsx 重建：右列双标签 视觉交互层/原生终端，常驻挂载，ActiveFilesMenu 在 header
+- ✅ BottomPanelTab 加 'terminal' 设默认；PanelTabBar 加"终端"标签；删除 AgentTerminalColumn
+- ✅ pty/worker.rs parse_agent 排除 bash/sh/zsh/fish
+- ✅ 防回归自检：新 selector 全订阅稳定引用，未重蹈 React #185
+- ⬜ 真机验证：本环境无法跑 exe，双标签切换/底部 bash 自动 spawn 仅过 tsc+build
 
 ### ✅ UI Layout 与底层代码分离（三层架构 — design.md §4.13 + §4.14）
 - 目标：布局可独立迭代而不碰业务逻辑，对齐 Penpot 初稿（page 2「Agent IDE — GUI Layout」）

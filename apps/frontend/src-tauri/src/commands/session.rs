@@ -150,7 +150,7 @@ pub struct ApprovalRequestEvent {
 #[tauri::command]
 pub async fn spawn_session(
     state: State<'_, AppState>,
-    app_handle: tauri::AppHandle,
+    _app_handle: tauri::AppHandle,
     connection_id: String,
     req: SpawnRequest,
 ) -> Result<SessionInfo, String> {
@@ -181,135 +181,120 @@ pub async fn spawn_session(
         container: req.container.clone(),
     };
 
-    transport.send(msg).await.map_err(|e| format!("Send failed: {}", e))?;
-    tracing::info!(%session_id, %connection_id, "SpawnSession sent, waiting for ack");
+    // Register an ack waiter BEFORE sending, so the connection's demux relay
+    // can fire it the instant the ack arrives. This avoids competing with the
+    // relay for the transport's single-consumer recv() stream (the bug that
+    // made a second session's ack/output get swallowed by the first relay).
+    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+    state.pending_acks.insert(session_id.clone(), ack_tx);
 
-    // Wait for SpawnSessionAck
-    let transport_for_recv = transport.clone();
-    let mut attempts = 0;
-    loop {
-        match transport_for_recv.recv().await.map_err(|e| format!("Recv failed: {}", e))? {
-            Some(ProtocolMessage::SpawnSessionAck { session_id: sid, pid, tool_version }) => {
-                tracing::info!(ack_session = %sid, expected = %session_id, "Got SpawnSessionAck");
-                if sid == session_id {
-                    tracing::info!(%session_id, pid, "Session spawned — starting relay task");
-
-                    // Record session → connection mapping for write/resize/close
-                    state.session_connections.insert(session_id.clone(), connection_id.clone());
-
-                    let handle = app_handle.clone();
-                    let sid_clone = session_id.clone();
-                    let t_relay = transport.clone();
-                    tokio::spawn(async move {
-                        relay_session_output(t_relay, handle, sid_clone).await;
-                    });
-                    tracing::info!(%session_id, "Relay task spawned");
-
-                    return Ok(SessionInfo {
-                        id: session_id,
-                        connection_id,
-                        tool: req.tool,
-                        tool_version,
-                        state: "running".into(),
-                        pid,
-                        created_at: chrono::Utc::now().to_rfc3339(),
-                        cols: req.terminal_cols,
-                        rows: req.terminal_rows,
-                        ended_at: None,
-                        exit_code: None,
-                        metadata: SessionMetadataDto {
-                            cwd: req.cwd.clone(),
-                            git_branch: None,
-                            git_repo: None,
-                            args: req.args.clone(),
-                        },
-                        cost: CostBreakdownDto::default(),
-                        turn_count: 0,
-                    });
-                }
-            }
-            Some(ProtocolMessage::SpawnSessionNack { session_id: sid, reason }) => {
-                tracing::warn!(nack_session = %sid, %reason, "Got SpawnSessionNack");
-                if sid == session_id {
-                    return Err(format!("Spawn failed: {}", reason));
-                }
-            }
-            Some(other) => {
-                if attempts < 5 {
-                    tracing::debug!(kind = other.kind(), %session_id, "Ignoring message while waiting for ack");
-                }
-            }
-            None => {
-                attempts += 1;
-                if attempts == 1 {
-                    tracing::warn!(%session_id, "recv() returned None — transport may not be receiving");
-                }
-                if attempts % 100 == 0 {
-                    tracing::warn!(%session_id, attempts, "Still waiting for SpawnSessionAck...");
-                }
-                if attempts > 600 {
-                    return Err("Timeout waiting for spawn response (30s)".into());
-                }
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-            }
-        }
+    if let Err(e) = transport.send(msg).await {
+        state.pending_acks.remove(&session_id);
+        return Err(format!("Send failed: {}", e));
     }
+    tracing::info!(%session_id, %connection_id, "SpawnSession sent, awaiting ack via demux relay");
+
+    // Await the ack (with a timeout) — the demux relay resolves it.
+    let ack = tokio::time::timeout(std::time::Duration::from_secs(30), ack_rx).await;
+    let (pid, tool_version) = match ack {
+        Ok(Ok(Ok((pid, tool_version)))) => (pid, tool_version),
+        Ok(Ok(Err(reason))) => return Err(format!("Spawn failed: {}", reason)),
+        Ok(Err(_)) => {
+            // Sender dropped without firing (relay died).
+            state.pending_acks.remove(&session_id);
+            return Err("Spawn failed: connection relay closed before ack".into());
+        }
+        Err(_) => {
+            state.pending_acks.remove(&session_id);
+            return Err("Timeout waiting for spawn response (30s)".into());
+        }
+    };
+
+    tracing::info!(%session_id, pid, "Session spawned (ack via demux relay)");
+    // Record session → connection mapping for write/resize/close.
+    state.session_connections.insert(session_id.clone(), connection_id.clone());
+
+    Ok(SessionInfo {
+        id: session_id,
+        connection_id,
+        tool: req.tool,
+        tool_version,
+        state: "running".into(),
+        pid,
+        created_at: chrono::Utc::now().to_rfc3339(),
+        cols: req.terminal_cols,
+        rows: req.terminal_rows,
+        ended_at: None,
+        exit_code: None,
+        metadata: SessionMetadataDto {
+            cwd: req.cwd.clone(),
+            git_branch: None,
+            git_repo: None,
+            args: req.args.clone(),
+        },
+        cost: CostBreakdownDto::default(),
+        turn_count: 0,
+    })
 }
 
 /// Relay terminal data and session events from the agent to the frontend.
 /// Also detects code changes from tool_result events and terminal output.
-async fn relay_session_output(
+///
+/// ONE demux relay per connection owns the transport's single-consumer recv()
+/// and fans messages out to the frontend keyed by each message's own
+/// session_id. This replaces the old per-session relays, which all competed
+/// for the same recv() stream and dropped each other's output and acks.
+pub async fn connection_demux_relay(
     transport: Arc<dyn crate::transport::Transport>,
     app_handle: tauri::AppHandle,
-    session_id: String,
+    connection_id: String,
 ) {
-    tracing::info!(%session_id, "Relay task started — listening for terminal output");
+    use tauri::Manager;
+    tracing::info!(%connection_id, "Demux relay started — owns transport recv()");
 
-    let mut terminal_buf = String::new();
-    let mut current_change_set_id: Option<String> = None;
+    // Per-session scratch state (multiple sessions share this relay now).
+    let mut terminal_bufs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut change_set_ids: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
     let mut empty_polls: u64 = 0;
-    let mut msg_count: u64 = 0;
-    let mut terminal_count: u64 = 0;
-    let mut ignored_count: u64 = 0;
 
     loop {
         match transport.recv().await {
+            // ── Spawn acks/nacks: resolve the waiting spawn_session ──
+            Ok(Some(ProtocolMessage::SpawnSessionAck { session_id: sid, pid, tool_version })) => {
+                tracing::info!(%connection_id, ack_session = %sid, pid, "Demux got SpawnSessionAck");
+                let state = app_handle.state::<crate::AppState>();
+                if let Some((_, tx)) = state.pending_acks.remove(&sid) {
+                    let _ = tx.send(Ok((pid, tool_version)));
+                }
+            }
+            Ok(Some(ProtocolMessage::SpawnSessionNack { session_id: sid, reason })) => {
+                tracing::warn!(%connection_id, nack_session = %sid, %reason, "Demux got SpawnSessionNack");
+                let state = app_handle.state::<crate::AppState>();
+                if let Some((_, tx)) = state.pending_acks.remove(&sid) {
+                    let _ = tx.send(Err(reason));
+                }
+            }
             Ok(Some(ProtocolMessage::TerminalData { session_id: sid, data, seq })) => {
-                msg_count += 1;
-                if sid != session_id {
-                    ignored_count += 1;
-                    if ignored_count <= 3 {
-                        tracing::debug!(msg_sid = %sid, relay_sid = %session_id, "Relay ignoring TerminalData for different session");
-                    }
-                    continue;
-                }
-                terminal_count += 1;
-                if terminal_count <= 5 || terminal_count % 50 == 0 {
-                    tracing::info!(%session_id, bytes = data.len(), seq, count = terminal_count, "Relay emitting terminal:data");
-                }
-
                 match app_handle.emit("terminal:data", TerminalDataEvent {
                     session_id: sid.clone(),
                     data: data.clone(),
                     seq,
                 }) {
                     Ok(()) => {}
-                    Err(e) => tracing::error!(%session_id, error = %e, "Failed to emit terminal:data event"),
+                    Err(e) => tracing::error!(%connection_id, session = %sid, error = %e, "Failed to emit terminal:data"),
                 }
 
-                // Tier 2: buffer terminal output and scan for unified diffs
+                // Tier 2: buffer terminal output per-session and scan for diffs.
                 let text = String::from_utf8_lossy(&data);
-                terminal_buf.push_str(&text);
-                if let Some(change) = scan_terminal_for_diff(
-                    &session_id, &mut terminal_buf, &mut current_change_set_id,
-                ) {
+                let buf = terminal_bufs.entry(sid.clone()).or_default();
+                buf.push_str(&text);
+                let csid = change_set_ids.entry(sid.clone()).or_default();
+                if let Some(change) = scan_terminal_for_diff(&sid, buf, csid) {
                     let _ = app_handle.emit("code:change", change);
                 }
             }
             Ok(Some(ProtocolMessage::SessionEvent { session_id: sid, event_type, data, .. })) => {
-                msg_count += 1;
-                if sid != session_id { continue; }
-                tracing::info!(%session_id, ?event_type, "Relay emitting session:event");
+                tracing::info!(%connection_id, session = %sid, ?event_type, "Demux emitting session:event");
 
                 let _ = app_handle.emit("session:event", SessionEventPayload {
                     session_id: sid.clone(),
@@ -318,9 +303,9 @@ async fn relay_session_output(
                 });
 
                 // Tier 1: detect code changes from tool_result events
+                let csid = change_set_ids.entry(sid.clone()).or_default();
                 if let Some(changes) = detect_code_changes_from_event(
-                    &session_id, &event_type, &data,
-                    &mut current_change_set_id,
+                    &sid, &event_type, &data, csid,
                 ) {
                     for change in changes {
                         let _ = app_handle.emit("code:change", change);
@@ -328,8 +313,6 @@ async fn relay_session_output(
                 }
             }
             Ok(Some(ProtocolMessage::AgentEvent { session_id: sid, kind, text, code, label, status, seq })) => {
-                msg_count += 1;
-                if sid != session_id { continue; }
                 let _ = app_handle.emit("agent:event", AgentEventPayload {
                     session_id: sid,
                     kind: format!("{:?}", kind).to_lowercase(),
@@ -337,40 +320,35 @@ async fn relay_session_output(
                 });
             }
             Ok(Some(ProtocolMessage::ApprovalRequest { session_id: sid, request_id, title, scope, command, cwd })) => {
-                msg_count += 1;
-                if sid != session_id { continue; }
-                tracing::info!(%session_id, %request_id, "Relay emitting approval:request");
+                tracing::info!(%connection_id, session = %sid, %request_id, "Demux emitting approval:request");
                 let _ = app_handle.emit("approval:request", ApprovalRequestEvent {
                     session_id: sid, request_id, title, scope, command, cwd,
                 });
             }
-            Ok(Some(ProtocolMessage::CloseSessionAck { .. })) => {
-                tracing::info!(%session_id, "Relay received CloseSessionAck, exiting");
-                break;
+            Ok(Some(ProtocolMessage::CloseSessionAck { session_id: sid, .. })) => {
+                // A session closed — drop its scratch state. The relay lives on
+                // for the connection's other sessions.
+                tracing::info!(%connection_id, session = %sid, "Demux: session closed");
+                terminal_bufs.remove(&sid);
+                change_set_ids.remove(&sid);
             }
             Ok(Some(other)) => {
-                msg_count += 1;
-                if msg_count <= 5 {
-                    tracing::debug!(%session_id, kind = other.kind(), "Relay received other message");
-                }
+                tracing::trace!(%connection_id, kind = other.kind(), "Demux received other message");
             }
             Ok(None) => {
                 empty_polls += 1;
-                if empty_polls == 1 {
-                    tracing::info!(%session_id, "Relay first empty poll — transport has no data yet, will keep waiting");
+                if empty_polls % 1000 == 0 {
+                    tracing::trace!(%connection_id, empty_polls, "Demux idle, waiting for data");
                 }
-                if empty_polls % 200 == 0 {
-                    tracing::info!(%session_id, empty_polls, msg_count, terminal_count, "Relay still alive, waiting for data");
-                }
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
             }
             Err(e) => {
-                tracing::warn!(error = %e, %session_id, msg_count, terminal_count, empty_polls, "Transport error, relay exiting");
+                tracing::warn!(%connection_id, error = %e, "Transport error, demux relay exiting");
                 break;
             }
         }
     }
-    tracing::info!(%session_id, msg_count, terminal_count, "Relay task ended");
+    tracing::info!(%connection_id, "Demux relay ended");
 }
 
 /// Tier 1: Detect code changes from structured SessionEvent data.

@@ -74,14 +74,26 @@ pub async fn connect(
         ).await
             .map_err(|e| format!("Bootstrap failed: {}", e))?;
 
-        // Store the transport for session commands
-        // recv() on this transport is consumed exclusively by spawn_session /
-        // relay_session_output — there must be only ONE consumer at any time.
+        // Store the transport for session commands.
+        // The transport's recv() is single-consumer; exactly ONE demux relay
+        // (spawned below) owns it and fans messages out to the frontend keyed
+        // by session_id. spawn_session never calls recv() — it awaits an ack
+        // oneshot the relay fires — so multiple sessions can't starve each other.
         let transport_arc: std::sync::Arc<dyn crate::transport::Transport> = transport;
         state.connection_transports.insert(id.clone(), transport_arc.clone());
 
         // Store SSH session for file listing / shell commands
         state.ssh_sessions.insert(id.clone(), std::sync::Arc::new(ssh_session));
+
+        // Spawn the per-connection demux relay (the sole recv() consumer).
+        {
+            let relay_app = app_handle.clone();
+            let relay_id = id.clone();
+            let relay_transport = transport_arc.clone();
+            tokio::spawn(async move {
+                crate::commands::session::connection_demux_relay(relay_transport, relay_app, relay_id).await;
+            });
+        }
 
         // Spawn health monitor: periodically check liveness and reconnect if dead
         let monitor_id = id.clone();
@@ -270,8 +282,18 @@ async fn try_reconnect(
     // 3. Replace stored transport and SSH handle
     let state = app_handle.state::<crate::AppState>();
     let transport_arc: std::sync::Arc<dyn crate::transport::Transport> = transport;
-    state.connection_transports.insert(connection_id.to_string(), transport_arc);
+    state.connection_transports.insert(connection_id.to_string(), transport_arc.clone());
     state.ssh_sessions.insert(connection_id.to_string(), std::sync::Arc::new(ssh_session));
+
+    // 4. Spawn a fresh demux relay for the new transport (the old one died with
+    //    the old transport).
+    {
+        let relay_app = app_handle.clone();
+        let relay_id = connection_id.to_string();
+        tokio::spawn(async move {
+            crate::commands::session::connection_demux_relay(transport_arc, relay_app, relay_id).await;
+        });
+    }
 
     Ok(())
 }

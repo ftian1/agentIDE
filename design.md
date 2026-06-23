@@ -506,6 +506,65 @@ const files = useMemo(() => selectActiveFiles({ bySession, kicked }, sessionId),
 
 ---
 
+### 4.21 重做「终端归位」（§4.19 工作区回退丢失后重建）
+
+§4.19 的「终端归位」成果在工作区部分回退中丢失，本节为重建。最终布局回到：
+**编辑器（中）· Agent 面板（右，双标签）· 底部面板（含终端标签）· 状态栏（底）。**
+
+**重建内容（同 §4.19 设计，外加一处隐患修正）：**
+- `bottom/BottomTerminal.tsx`：底部「终端」标签 = 用户独立 Bash SSH 会话，会话 id 存 `bottomPanelSessionId`。
+  **修正回退残留版本的隐患**：旧 `terminal/BottomTerminal.tsx` 用 `sessionStore.spawn` 开 bash，会把 bash 塞进
+  `sessionStore.sessions` 并篡夺 `activeSessionId`（误导右列 Agent 面板与状态栏）。新版直接调 `api.spawn` 不经
+  sessionStore，已删旧版。
+- `agentpanel/AgentColumnPanel.tsx`：右列双标签（视觉交互层=`AgentPanel` / 原生终端=`TerminalInstance`），
+  两标签常驻挂载（inactive 用 hidden），`ActiveFilesMenu` 在 header。删除 `terminal/AgentTerminalColumn.tsx`。
+- `BottomPanelTab` 增 `'terminal'` 且设默认；切标签时终端保持挂载防 scrollback 丢失。
+- `pty/worker.rs` `parse_agent` 排除 `bash/sh/zsh/fish`（纯 shell 不当 agent JSON 解析）。
+
+**防回归自检：** 新建组件的 selector 全部只订阅稳定引用（`s.connections`/`s.activeSessionId`/`s.bottomPanelSessionId`），
+`Object.values(connections)` 在 render 内派生而非作为 selector 返回值——避免重蹈 §4.20 的 React #185。
+
+**未验证项：** 本环境无法跑 Windows exe，双标签切换 / 底部 bash 自动 spawn / 原生终端渲染仅过 tsc+build，
+未经真机验证。
+
+---
+
+### 4.22 多会话 transport 消费冲突修复（per-session relay → per-connection demux relay）
+
+**问题：** 三个连带 bug——①双击文件在 editor 打不开；②右列「原生终端」不 dump CLI 的 TUI；③底部 Bash 终端
+连上后无法交互。另含一个独立的启动闪烁。
+
+**①文件打不开（前端遗漏）：** `FileBrowser` 的 `FileTreeRow.handleClick` 只在 `isDir` 时 `onToggle`，**文件点击
+无任何打开逻辑**。补 `onOpenFile` → `addEditorTab({ id, filePath, label, connectionId })`，`useWorkspaceView` 见
+`connectionId` 即渲染中间 `CodeEditor`。
+
+**②③根因（后端架构 bug，二者同源）：** 一条 SSH transport 的 `recv()` 是**单消费者队列**（`mpsc` + Mutex）。
+旧实现 **每个 session 在 spawn ack 后各起一个 `relay_session_output`**，它们都 `recv()` 抢同一队列：
+- 第二个会话（bash）的 `TerminalData` 被先启动的 agent relay 抢到 → 因 `sid != self` 被 `continue` **丢弃**，
+  前端收不到输出 → 原生终端无 TUI、底部 bash 无回显；
+- 甚至 bash 的 `SpawnSessionAck` 也可能被别的 relay 抢走丢弃 → spawn 超时。
+  （`connection.rs` 旧注释已写「must be only ONE consumer」，但多 session 场景违反了它。）
+
+**修复（per-connection 单一 demux relay）：**
+- connect 时（及 reconnect）起**一个** `connection_demux_relay`，独占该 transport 的 `recv()`，按每条消息**自带的
+  session_id** 把 `terminal:data`/`session:event`/`agent:event`/`approval:request` fan-out 到前端（前端事件本就带
+  session_id，各 `TerminalInstance` 自行过滤）。per-session 的 `terminal_buf`/`change_set_id` 改为 `HashMap` 按
+  session 维护。本地 IPC agent 走同一 relay（连接名 `"local"`），删除了原 `relay_agent_messages` 占位空循环。
+- `spawn_session` **不再自己 `recv()`**：发送前在 `AppState.pending_acks: DashMap<session_id, oneshot::Sender>`
+  注册一个 oneshot，demux relay 收到 Ack/Nack 时 fire 它，spawn 端 `timeout(30s, ack_rx)` 等结果。彻底消除
+  spawn 与 relay 抢 recv。
+- demux 收到 `CloseSessionAck` 只清理该 session 的 scratch state，**不再 break**（继续服务连接上的其他会话）。
+
+**④启动闪烁（与 §4.19 同源的窗口策略收尾）：** `visible:true` 下 `maximized:true` 会让窗口先以 1400×900 显示再
+放大 → 尺寸跳变即「闪一下」。改为 `maximized` 去除、`width/height` 直接给 1600×1000 + `center:true`，纯 Rust 侧
+无 JS 依赖（不重蹈黑屏）。顺手删 `lib.rs` 中过时的 3s 兜底 show 定时器（窗口已常显，无意义）。
+
+**取舍：** demux 是「单一所有者 + 按 id 分发」的标准解法，比"每消费者自过滤"更省（不再丢弃+重抢）。spawn 用
+oneshot 而非轮询，延迟更低且无超时计数 hack。**未验证项：** 本环境无法跑 exe，多会话并发（agent + bash 同时）
+的真机行为仅过编译，需真机验证。
+
+---
+
 ## 5. 关键文件索引
 
 | 组件 | 路径 |

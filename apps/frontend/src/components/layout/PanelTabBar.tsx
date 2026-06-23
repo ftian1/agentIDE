@@ -5,6 +5,7 @@ import { useLayoutStore } from '../../stores/layoutStore';
 import type { BottomPanelTab } from '../../stores/layoutStore';
 
 const TABS: { id: BottomPanelTab; label: string }[] = [
+  { id: 'terminal', label: '终端' },
   { id: 'agentStdout', label: 'Agent Stdout' },
   { id: 'mcpLogs', label: 'MCP / 插件日志' },
   { id: 'fileSync', label: '文件同步 Sync' },
