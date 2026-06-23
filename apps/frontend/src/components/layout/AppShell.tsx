@@ -6,21 +6,35 @@ import { BottomPanel } from './BottomPanel';
 
 interface AppShellProps {
   children: ReactNode;
+  topBar?: ReactNode;
   sidebar?: ReactNode;
   bottomPanelContent?: ReactNode;
   statusBar?: ReactNode;
   rightPanel?: ReactNode;
+  agentPanel?: ReactNode;
 }
 
 /**
  * Antigravity-style IDE layout:
  *
- *   ActivityBar | SecondarySidebar | EditorTabBar + ContentArea + BottomPanel | RightPanel
+ *   TopBar (menu + search + status)
+ *   ActivityBar | SecondarySidebar | EditorTabBar + ContentArea + BottomPanel | AgentPanel | RightPanel
  *   StatusBar (bottom)
  */
-export function AppShell({ children, sidebar, bottomPanelContent, statusBar, rightPanel }: AppShellProps) {
+export function AppShell({
+  children,
+  topBar,
+  sidebar,
+  bottomPanelContent,
+  statusBar,
+  rightPanel,
+  agentPanel,
+}: AppShellProps) {
   return (
     <div className="flex flex-col h-screen bg-bg-primary">
+      {/* Top menu bar */}
+      {topBar}
+
       {/* Main row */}
       <div className="flex flex-1 overflow-hidden">
         {/* Activity Bar (leftmost) */}
@@ -41,6 +55,9 @@ export function AppShell({ children, sidebar, bottomPanelContent, statusBar, rig
             {bottomPanelContent}
           </BottomPanel>
         </div>
+
+        {/* Agent panel (right-side Claude Code conversation) */}
+        {agentPanel}
 
         {/* Right panel (session detail) */}
         {rightPanel}
@@ -97,7 +114,16 @@ function StatusBar({ children }: { children: ReactNode }) {
   );
 }
 
+function AgentColumn({ children }: { children: ReactNode }) {
+  return (
+    <aside className="w-96 flex-shrink-0 bg-bg-secondary border-l border-border flex flex-col">
+      {children}
+    </aside>
+  );
+}
+
 AppShell.Sidebar = Sidebar;
 AppShell.Main = Main;
 AppShell.RightPanel = RightPanel;
 AppShell.StatusBar = StatusBar;
+AppShell.AgentColumn = AgentColumn;

@@ -37,47 +37,63 @@ export function TerminalPane() {
     );
   }
 
+  const activeSessions = sessionList.filter(
+    (s) => s.state === 'running' || s.state === 'spawning'
+  );
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Tab bar */}
-      {sessionList.length > 1 && (
-        <div className="flex items-center bg-bg-secondary border-b border-border px-1">
-          {sessionList.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => setActive(s.id)}
-              className={`
-                px-3 py-1.5 text-xs border-b-2 transition-colors
-                ${s.id === activeId
-                  ? 'border-accent text-text-primary'
-                  : 'border-transparent text-text-secondary hover:text-text-primary'
-                }
-              `}
-            >
-              {s.tool}
-              <span className="ml-2 text-text-secondary opacity-50">#{s.id.slice(0, 6)}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Terminal area */}
-      <div className="flex-1 relative">
-        {sessionList.map((s) => (
+      {/* Tab bar — always visible when sessions exist */}
+      <div className="flex items-center bg-bg-secondary border-b border-border px-1">
+        {activeSessions.map((s) => (
           <div
             key={s.id}
-            className="absolute inset-0"
-            style={{ display: s.id === activeId ? 'block' : 'none' }}
+            className={`flex items-center gap-1 px-3 py-1.5 text-xs border-b-2 transition-colors group
+              ${s.id === activeId
+                ? 'border-accent text-text-primary'
+                : 'border-transparent text-text-secondary hover:text-text-primary cursor-pointer'
+              }`}
           >
-            <TerminalInstance
-              sessionId={s.id}
-              api={api}
-              onReady={(cols, rows) => {
-                console.log(`Terminal ready: ${s.id} ${cols}x${rows}`);
+            <button
+              onClick={() => setActive(s.id)}
+              className="flex items-center gap-1.5"
+            >
+              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 bg-green-400" />
+              {s.tool}
+              <span className="text-text-secondary opacity-50">#{s.id.slice(0, 6)}</span>
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                useSessionStore.getState().close(s.id);
               }}
-            />
+              className="ml-1 p-0.5 rounded hover:bg-red-900/30 text-text-secondary hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+              title="Close session"
+            >
+              <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1L1 9" stroke="currentColor" strokeWidth="1.5"/></svg>
+            </button>
           </div>
         ))}
+      </div>
+
+      {/* Terminal area — only render the active terminal. */}
+      <div className="flex-1">
+        {activeSession ? (
+          <TerminalInstance
+            key={activeSession.id}
+            sessionId={activeSession.id}
+            api={api}
+            onReady={(cols, rows) => {
+              console.log(`Terminal ready: ${activeSession.id} ${cols}x${rows}`);
+            }}
+          />
+        ) : (
+          <div className="flex items-center justify-center h-full">
+            <p className="text-xs text-text-secondary italic">
+              {activeSessions.length > 0 ? 'Select a session tab above.' : 'No active sessions.'}
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

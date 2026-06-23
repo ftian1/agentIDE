@@ -61,7 +61,17 @@ impl Handler for SshClientHandler {
 pub async fn connect(params: &SshConnectionParams) -> anyhow::Result<SshSession> {
     tracing::info!(host = %params.host, port = params.port, user = %params.user, "Connecting via SSH");
 
-    let config = Arc::new(client::Config::default());
+    let mut config = client::Config::default();
+    // Keep-alive: send a request every 30s of idle time, waiting up to 10s for response.
+    // This prevents NAT/firewall timeouts and detects dead connections early.
+    config.keepalive_interval = Some(std::time::Duration::from_secs(30));
+    config.keepalive_max = 3; // disconnect after 3 unanswered keep-alives
+    // Disable Nagle's algorithm. Without this, bulk transfers (e.g. the ~1.8MB
+    // agent binary upload) stall on the Nagle/delayed-ACK interaction: russh
+    // chunks data into 32KB SSH packets and TCP holds them waiting for ACKs,
+    // turning a sub-second upload into ~8s. nodelay sends each packet immediately.
+    config.nodelay = true;
+    let config = Arc::new(config);
     let sh = SshClientHandler;
 
     let addr = format!("{}:{}", params.host, params.port);
@@ -134,8 +144,78 @@ pub async fn exec_remote(
             _ => continue,
         }
     }
+    // Explicitly close the channel so the server releases it immediately.
+    // Without this, rapid-fire exec_remote calls (e.g., chunked upload)
+    // exhaust the server's channel limit.
+    let _ = channel.close().await;
 
     Ok(String::from_utf8_lossy(&output).trim().to_string())
+}
+
+/// Upload raw bytes to a remote file by piping through a command's stdin.
+///
+/// Opens an exec channel running `cat > <remote_path>`, writes all data
+/// directly via [`Channel::data_bytes`], then sends EOF.  This is a single
+/// SSH channel operation — no base64 encoding, no chunking, no sleep between
+/// chunks.
+///
+/// Returns the number of bytes written.
+pub async fn upload_raw(
+    session: &SshSession,
+    data: &[u8],
+    remote_path: &str,
+) -> anyhow::Result<usize> {
+    upload_raw_cmd(session, data, &format!("cat > {}", remote_path)).await
+}
+
+/// Upload raw bytes by piping through stdin of an arbitrary remote command.
+///
+/// Like [`upload_raw`] but lets the caller supply the full command (e.g.
+/// `mkdir -p dir && cat > dir/file`), so directory creation can be fused
+/// into the same channel as the data write — saving a round-trip.
+pub async fn upload_raw_cmd(
+    session: &SshSession,
+    data: &[u8],
+    command: &str,
+) -> anyhow::Result<usize> {
+    let len = data.len();
+    let mut channel = session.handle.channel_open_session().await
+        .context("Failed to open SSH channel for upload")?;
+
+    channel.exec(true, command).await
+        .context("Failed to exec upload command")?;
+
+    // Write all data at once
+    let b: bytes::Bytes = data.to_vec().into();
+    channel.data_bytes(b).await
+        .context("Failed to write data to SSH channel")?;
+
+    // Signal EOF so the remote command's stdin closes and it exits
+    channel.eof().await.context("Failed to send EOF")?;
+
+    // Drain the channel until we see exit status or EOF
+    loop {
+        match channel.wait().await {
+            Some(ChannelMsg::ExitStatus { .. }) => {
+                tracing::debug!(bytes = len, "Upload complete (exit status received)");
+                break;
+            }
+            Some(ChannelMsg::Eof) | None => {
+                tracing::debug!(bytes = len, "Upload complete (EOF)");
+                break;
+            }
+            Some(ChannelMsg::Data { ref data }) => {
+                let text = String::from_utf8_lossy(data);
+                if !text.trim().is_empty() {
+                    tracing::debug!(stderr = %text.trim(), "Upload stderr");
+                }
+            }
+            _ => continue,
+        }
+    }
+    let _ = channel.close().await;
+
+    Ok(len)
 }
 
 /// Default SSH key path.

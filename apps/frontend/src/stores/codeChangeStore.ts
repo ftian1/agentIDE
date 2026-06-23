@@ -7,9 +7,11 @@
  */
 import { create } from 'zustand';
 import { detectLanguage } from '../lib/languageDetector';
+import { computeDiff, reconstruct, type Hunk } from '../lib/diff';
 
 export type ChangeSetStatus = 'pending' | 'complete';
 export type FileChangeStatus = 'pending' | 'accepted' | 'rejected';
+export type HunkDecision = 'pending' | 'accepted' | 'rejected';
 
 export interface FileChange {
   id: string;
@@ -21,6 +23,8 @@ export interface FileChange {
   newContent: string | null;
   diff: string;
   status: FileChangeStatus;
+  /** Per-hunk accept/reject state, keyed by hunk id. */
+  hunkDecisions: Record<string, HunkDecision>;
 }
 
 export interface ChangeSet {
@@ -46,6 +50,16 @@ export interface CodeChangeStore {
   rejectChange: (changeId: string) => Promise<void>;
   acceptAllInFile: (changeSetId: string, filePath: string) => Promise<void>;
   rejectAllInFile: (changeSetId: string, filePath: string) => Promise<void>;
+
+  // Per-hunk staged-changes controls.
+  setHunkDecision: (changeSetId: string, filePath: string, hunkId: string, decision: HunkDecision) => void;
+  /** Apply currently-accepted hunks to the remote file via write_file. */
+  applyAcceptedHunks: (changeSetId: string, filePath: string) => Promise<void>;
+}
+
+/** Hunks for a file change, recomputed from its old/new content. */
+export function fileHunks(file: FileChange): Hunk[] {
+  return computeDiff(file.oldContent ?? '', file.newContent ?? '').hunks;
 }
 
 export const useCodeChangeStore = create<CodeChangeStore>((set, get) => ({
@@ -133,6 +147,77 @@ export const useCodeChangeStore = create<CodeChangeStore>((set, get) => ({
     if (!file) return;
     get()._updateChangeStatus(file.id, 'rejected');
   },
+
+  setHunkDecision(changeSetId, filePath, hunkId, decision) {
+    set((s) => {
+      const cs = s.changeSets[changeSetId];
+      if (!cs) return s;
+      const file = cs.files[filePath];
+      if (!file) return s;
+      return {
+        changeSets: {
+          ...s.changeSets,
+          [changeSetId]: {
+            ...cs,
+            files: {
+              ...cs.files,
+              [filePath]: {
+                ...file,
+                hunkDecisions: { ...file.hunkDecisions, [hunkId]: decision },
+              },
+            },
+          },
+        },
+      };
+    });
+  },
+
+  async applyAcceptedHunks(changeSetId: string, filePath: string) {
+    const cs = get().changeSets[changeSetId];
+    if (!cs) return;
+    const file = cs.files[filePath];
+    if (!file) return;
+
+    const hunks = fileHunks(file);
+    const content = reconstruct(file.oldContent ?? '', hunks, file.hunkDecisions);
+
+    // Resolve the connection for this session so we can write to the right host.
+    const { useSessionStore } = await import('./sessionStore');
+    const connectionId = useSessionStore.getState().sessions[file.sessionId]?.connectionId;
+    if (!connectionId) {
+      throw new Error(`No connection for session ${file.sessionId}`);
+    }
+
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('write_file', { connectionId, path: file.filePath, content });
+
+    // Once written, the accepted hunks ARE the file: fold them into oldContent
+    // so the diff view collapses them and any remaining pending hunks re-base
+    // against the now-current file.
+    const allDecided = hunks.every((h) => file.hunkDecisions[h.id] && file.hunkDecisions[h.id] !== 'pending');
+    set((s) => {
+      const cs2 = s.changeSets[changeSetId];
+      if (!cs2) return s;
+      const f2 = cs2.files[filePath];
+      if (!f2) return s;
+      return {
+        changeSets: {
+          ...s.changeSets,
+          [changeSetId]: {
+            ...cs2,
+            files: {
+              ...cs2.files,
+              [filePath]: {
+                ...f2,
+                oldContent: content,
+                status: allDecided ? 'accepted' : f2.status,
+              },
+            },
+          },
+        },
+      };
+    });
+  },
 }));
 
 /**
@@ -170,6 +255,7 @@ export function initCodeChangeListeners() {
         newContent: p.new_content ?? null,
         diff: p.diff,
         status: 'pending',
+        hunkDecisions: {},
       });
     });
 

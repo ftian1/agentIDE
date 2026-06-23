@@ -1,123 +1,115 @@
 //! Upload the Remote Agent Host binary to the remote Linux machine.
 //!
-//! The binary is embedded at compile time. We upload it by:
-//! 1. Creating the target directory (ssh exec: mkdir -p)
-//! 2. Base64-encoding the binary and piping it via ssh exec to
-//!    `base64 -d > ~/.remote-agent-host/agent`
-//! 3. Setting executable permissions (ssh exec: chmod +x)
+//! Uses raw binary transfer over an SSH channel (single operation, no
+//! base64 encoding, no chunking, no inter-chunk sleep).
 
 use anyhow::Context;
-use base64::Engine;
+use sha2::{Sha256, Digest};
 
 use crate::connection::ssh::{self, SshSession};
-use crate::transport::Transport;
 
-/// Architecture-specific binary data.
 pub struct EmbeddedBinary {
     pub arch: &'static str,
     pub data: &'static [u8],
+    /// Pre-computed SHA256 hex string (computed once at first access).
+    sha256: std::sync::OnceLock<String>,
 }
 
-/// Return the embedded binary for the given architecture, if available.
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
+impl EmbeddedBinary {
+    pub fn sha256_hex(&self) -> &str {
+        self.sha256.get_or_init(|| {
+            let mut hasher = Sha256::new();
+            hasher.update(self.data);
+            bytes_to_hex(&hasher.finalize())
+        })
+    }
+}
+
 pub fn get_embedded(arch: &str) -> Option<EmbeddedBinary> {
     match arch {
         "x86_64" => Some(EmbeddedBinary {
             arch: "x86_64",
-            data: include_bytes!("../../../binaries/remote-agent-host-x86_64"),
+            data: include_bytes!("../../binaries/remote-agent-host-x86_64"),
+            sha256: std::sync::OnceLock::new(),
         }),
         "aarch64" => Some(EmbeddedBinary {
             arch: "aarch64",
-            data: include_bytes!("../../../binaries/remote-agent-host-aarch64"),
+            data: include_bytes!("../../binaries/remote-agent-host-aarch64"),
+            sha256: std::sync::OnceLock::new(),
         }),
         _ => None,
     }
 }
 
-/// Upload the agent binary to the remote host and make it executable.
+/// Upload the agent binary to the remote host.
+///
+/// Opens a single SSH exec channel running `cat > <path>`, writes raw
+/// bytes via [`ssh::upload_raw`], verifies the file size, and chmods.
+///
+/// Round-trips are minimized: the destination dir is created as part of the
+/// upload command's shell (`mkdir -p ... && cat > tmp`), and size-verify +
+/// atomic-rename + chmod are fused into a single exec call afterward. With
+/// Nagle disabled on the SSH socket, the raw write itself is ~1 RTT.
 pub async fn upload_agent(
     session: &SshSession,
     binary: &EmbeddedBinary,
+    home_dir: &str,
 ) -> anyhow::Result<String> {
-    let remote_path = "~/.remote-agent-host/agent";
-    let size_kb = binary.data.len() as f64 / 1024.0;
+    let dir = format!("{}/.remote-agent-host", home_dir.trim_end_matches('/'));
+    let remote_path = format!("{}/agent", dir);
+    let tmp_path = format!("{}/agent.tmp", dir);
+    let expected = binary.data.len();
+    tracing::info!(arch = binary.arch, size_kb = expected as f64 / 1024.0, "Uploading agent (raw)");
 
-    tracing::info!(arch = binary.arch, size_kb, "Uploading agent binary");
-
-    // Create the target directory
-    ssh::exec_remote(session, "mkdir -p ~/.remote-agent-host/").await
-        .context("Failed to create target directory")?;
-
-    // Encode binary as base64 and pipe to remote
-    let b64 = base64::engine::general_purpose::STANDARD.encode(binary.data);
-
-    // Split into chunks to avoid overwhelming the SSH channel buffer
-    const CHUNK_SIZE: usize = 65536; // 64KB base64 chunks
-    let total_chunks = (b64.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
-
-    // Write the file in chunks: first chunk creates/overwrites, subsequent chunks append
-    for (i, chunk) in b64.as_bytes().chunks(CHUNK_SIZE).enumerate() {
-        let chunk_str = String::from_utf8_lossy(chunk);
-        let cmd = if i == 0 {
-            format!("echo '{}' | base64 -d > {}", chunk_str, remote_path)
-        } else {
-            format!("echo '{}' | base64 -d >> {}", chunk_str, remote_path)
-        };
-
-        ssh::exec_remote(session, &cmd).await
-            .context(format!("Failed to upload chunk {}/{}", i + 1, total_chunks))?;
-
-        if total_chunks > 1 && (i + 1) % 10 == 0 {
-            tracing::debug!("Upload progress: {}/{} chunks", i + 1, total_chunks);
-        }
-    }
-
-    // Set executable permissions
-    ssh::exec_remote(session, "chmod +x ~/.remote-agent-host/agent").await
-        .context("Failed to chmod agent binary")?;
-
-    tracing::info!(path = remote_path, "Agent binary uploaded and ready");
-
-    Ok(remote_path.to_string())
-}
-
-/// Start the agent on the remote host via SSH exec.
-/// Spawns a background task that reads messages from the SSH channel
-/// and forwards them to the provided sender.
-pub async fn start_agent(
-    session: &SshSession,
-    transport_tx: tokio::sync::mpsc::UnboundedSender<shared_protocol::ProtocolMessage>,
-) -> anyhow::Result<()> {
-    let channel = ssh::open_exec_channel(
+    // Upload to a temp path; the upload command's shell creates the dir first,
+    // so this fuses mkdir + write into one channel.
+    let written = ssh::upload_raw_cmd(
         session,
-        "~/.remote-agent-host/agent --mode stdio --log-level info",
+        binary.data,
+        &format!("mkdir -p {dir} && cat > {tmp_path}"),
     )
     .await
-    .context("Failed to start agent on remote host")?;
+    .context("raw upload")?;
 
-    let transport = crate::transport::ssh_channel::SshChannelTransport::new(channel);
+    if written != expected {
+        anyhow::bail!("Upload size mismatch: expected {expected}, wrote {written}");
+    }
 
-    // Spawn reader task
-    tokio::spawn(async move {
-        loop {
-            match transport.recv().await {
-                Ok(Some(msg)) => {
-                    tracing::trace!(kind = msg.kind(), "Received from agent");
-                    if transport_tx.send(msg).is_err() {
-                        tracing::warn!("Transport channel closed");
-                        break;
-                    }
-                }
-                Ok(None) => {
-                    tracing::info!("Agent transport closed (EOF)");
-                    break;
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "Agent transport error");
-                    break;
-                }
-            }
-        }
-    });
+    // Fuse verify + atomic rename + chmod into a single round-trip.
+    // Echoes OK only if the on-disk size matches; the rename is atomic so a
+    // partial upload never clobbers a good binary.
+    let verify = ssh::exec_remote(session, &format!(
+        "s=$(stat -c%s {tmp_path}); \
+         if [ \"$s\" = \"{expected}\" ]; then \
+            mv -f {tmp_path} {remote_path} && chmod +x {remote_path} && echo OK; \
+         else echo \"SIZE=$s\"; fi"
+    ))
+    .await
+    .context("verify+install")?;
 
-    Ok(())
+    if verify.trim() != "OK" {
+        anyhow::bail!("Upload verification failed: {}", verify.trim());
+    }
+
+    tracing::info!(path = %remote_path, bytes = expected, "Upload complete");
+    Ok(remote_path)
+}
+
+pub async fn start_agent(
+    session: &SshSession,
+    home_dir: &str,
+) -> anyhow::Result<std::sync::Arc<crate::transport::ssh_channel::SshChannelTransport>> {
+    let path = format!("{}/.remote-agent-host/agent", home_dir.trim_end_matches('/'));
+    let ch = ssh::open_exec_channel(session, &format!("{} --mode stdio --log-level info", path))
+        .await
+        .context("start agent")?;
+    Ok(std::sync::Arc::new(crate::transport::ssh_channel::SshChannelTransport::new(ch)))
 }

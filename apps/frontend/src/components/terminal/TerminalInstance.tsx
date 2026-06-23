@@ -29,6 +29,8 @@ export function TerminalInstance({ sessionId, api, onReady }: Props) {
     const container = containerRef.current;
     if (!container) return;
 
+    const fitAddon = new FitAddon();
+
     const term = new Terminal({
       cursorBlink: true,
       cursorStyle: 'bar',
@@ -61,20 +63,20 @@ export function TerminalInstance({ sessionId, api, onReady }: Props) {
       scrollback: 10000,
     });
 
-    const fitAddon = new FitAddon();
     const webLinksAddon = new WebLinksAddon();
-
     term.loadAddon(fitAddon);
     term.loadAddon(webLinksAddon);
 
     term.open(container);
-    fitAddon.fit();
+
+    // Delay fit to let CSS layout settle, then fit
+    requestAnimationFrame(() => {
+      try { fitAddon.fit(); } catch {}
+      onReady?.(term.cols, term.rows);
+    });
 
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
-
-    // Report initial dimensions
-    onReady?.(term.cols, term.rows);
 
     // Subscribe to terminal data for this session
     const unlisten = api.onData((sid, data, _seq) => {
@@ -101,9 +103,11 @@ export function TerminalInstance({ sessionId, api, onReady }: Props) {
     };
   }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Refit on container resize
+  // Refit on container resize — use rAF to let layout settle
   const handleResize = useCallback(() => {
-    fitAddonRef.current?.fit();
+    requestAnimationFrame(() => {
+      try { fitAddonRef.current?.fit(); } catch {}
+    });
   }, []);
 
   useEffect(() => {
@@ -117,7 +121,6 @@ export function TerminalInstance({ sessionId, api, onReady }: Props) {
     <div
       ref={containerRef}
       className="h-full w-full"
-      style={{ overflow: 'hidden' }}
     />
   );
 }

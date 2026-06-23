@@ -17,6 +17,11 @@ apps/frontend/src-tauri/binaries/
 # Test binaries
 crates/remote-agent-host/tests/test-agent
 
+# Build artifacts — binaries are rebuilt from source, never committed
+*.exe
+*.msi
+step_*.exe
+
 # Logs
 *.log
 /tmp/

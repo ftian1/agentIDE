@@ -11,6 +11,7 @@ mod session;
 mod pty;
 mod transport;
 mod installer;
+mod agent_parse;
 
 fn parse_mode() -> String {
     let args: Vec<String> = std::env::args().collect();
@@ -27,17 +28,80 @@ fn parse_mode() -> String {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // CRITICAL: logging must go to stderr, never stdout.
-    // stdout is the protocol wire — any extra bytes corrupt framing.
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_target(false)
-        .with_ansi(false) // No ANSI escapes in stderr either (cleaner logs)
-        .init();
+    // Handle --version: print version and exit (used by bootstrap for version check)
+    for arg in std::env::args() {
+        if arg == "--version" {
+            println!("0.2.1");
+            return Ok(());
+        }
+    }
+
+    // Parse --log-file <path> for persistent debug logging
+    let log_file = {
+        let args: Vec<String> = std::env::args().collect();
+        let mut log_path = None;
+        let mut i = 1;
+        while i < args.len() {
+            if args[i] == "--log-file" && i + 1 < args.len() {
+                log_path = Some(args[i + 1].clone());
+                i += 1;
+            }
+            i += 1;
+        }
+        log_path
+    };
+
+    // Set up logging: always to stderr, optionally also to a file.
+    let file_log = log_file.clone();
+    if let Some(path) = file_log {
+        let file = std::fs::File::create(&path)
+            .unwrap_or_else(|_| panic!("Failed to create log file: {}", path));
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("info")),
+            )
+            .with_target(false)
+            .with_ansi(false)
+            .init();
+        // Also write a marker to the file so we know logging works
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path)
+            .unwrap_or_else(|_| panic!("Failed to open log file: {}", path));
+        let _ = writeln!(f, "Agent starting pid={}", std::process::id());
+    } else {
+        // Fallback: write log to ~/.remote-agent-host/agent.log
+        let default_log = std::env::var("HOME")
+            .map(|h| std::path::PathBuf::from(h).join(".remote-agent-host/agent.log"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/remote-agent-host-agent.log"));
+        let _ = std::fs::create_dir_all(default_log.parent().unwrap());
+        match std::fs::File::create(&default_log) {
+            Ok(file) => {
+                tracing_subscriber::fmt()
+                    .with_writer(std::sync::Mutex::new(file))
+                    .with_env_filter(
+                        EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| EnvFilter::new("info")),
+                    )
+                    .with_target(false)
+                    .with_ansi(false)
+                    .init();
+            }
+            Err(_) => {
+                // Can't create log file — fall back to stderr only
+                tracing_subscriber::fmt()
+                    .with_writer(std::io::stderr)
+                    .with_env_filter(
+                        EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| EnvFilter::new("info")),
+                    )
+                    .with_target(false)
+                    .with_ansi(false)
+                    .init();
+            }
+        }
+    }
 
     let _mode = parse_mode();
     tracing::info!("Remote Agent Host starting");

@@ -11,11 +11,17 @@ path = "src/main.rs"
 [[bin]]
 name = "ssh-test"
 path = "src/bin/ssh-test.rs"
+required-features = ["ssh-test"]
+
+[features]
+default = []
+ssh-test = ["russh", "ssh-key", "base64", "async-trait"]
 
 [dependencies]
 shared-protocol = { path = "../shared-protocol" }
 tokio.workspace = true
 serde.workspace = true
+serde_json = "1"
 rmp-serde.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -26,8 +32,8 @@ chrono.workspace = true
 bytes = "1"
 portable-pty = "0.9"
 
-# SSH support for ssh-test binary
-russh = { version = "0.61", features = ["async-trait"] }
-ssh-key = { version = "0.6", features = ["ed25519"] }
-base64 = "0.22"
-async-trait = "0.1"
+# Only needed by ssh-test binary
+russh = { version = "0.61", features = ["async-trait"], optional = true }
+ssh-key = { version = "0.6", features = ["ed25519"], optional = true }
+base64 = { version = "0.22", optional = true }
+async-trait = { version = "0.1", optional = true }

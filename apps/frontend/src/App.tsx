@@ -2,21 +2,33 @@ import { useState, useMemo, lazy, Suspense } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { SecondarySidebar } from './components/layout/SecondarySidebar';
 import { ExplorerPanel } from './components/explorer/ExplorerPanel';
+import { AgentManagerPanel } from './components/agent/AgentManagerPanel';
+import { SessionManagerPanel } from './components/session/SessionManagerPanel';
 import { SearchPanel } from './components/search/SearchPanel';
 import { StatusPanel } from './components/status/StatusPanel';
+import { MenuBar } from './components/menubar/MenuBar';
+import { ConnectionBadge } from './components/status/ConnectionBadge';
+import { ApprovalQueue } from './components/approval/ApprovalQueue';
+import { CodeEditor } from './components/editor/CodeEditor';
+import { AgentStdout } from './components/bottom/AgentStdout';
+import { McpLogs, FileSyncPanel, PortsPanel } from './components/bottom/BottomPanels';
 import { useLayoutStore } from './stores/layoutStore';
+import { useWorkspaceView, useConnectionBootstrap } from './hooks/useWorkspaceView';
 
 /** Heavy components lazy-loaded — only fetched when actually needed. */
 const CodeChangesSidebar = lazy(() =>
   import('./components/changes/CodeChangesSidebar').then(m => ({ default: m.CodeChangesSidebar })));
 const CodeChangeEditor = lazy(() =>
   import('./components/changes/CodeChangeEditor').then(m => ({ default: m.CodeChangeEditor })));
-const TerminalPane = lazy(() =>
-  import('./components/terminal/TerminalPane').then(m => ({ default: m.TerminalPane })));
+// TerminalPane is NOT lazy — needed immediately when session spawns (race with relay events)
+import { AgentTerminalColumn } from './components/terminal/AgentTerminalColumn';
+import { TerminalDebugOverlay } from './components/debug/TerminalDebugOverlay';
 const SessionDetail = lazy(() =>
   import('./components/detail/SessionDetail').then(m => ({ default: m.SessionDetail })));
 const ConnectionDialog = lazy(() =>
   import('./components/connection/ConnectionDialog').then(m => ({ default: m.ConnectionDialog })));
+const AgentBackendModal = lazy(() =>
+  import('./components/settings/AgentBackendModal').then(m => ({ default: m.AgentBackendModal })));
 
 /** Minimal loading placeholder — avoids layout shift. */
 function Spinner({ label }: { label?: string }) {
@@ -45,21 +57,51 @@ function SettingsPanel() {
   );
 }
 
+function ToolsPanel() {
+  return (
+    <div className="flex flex-col h-full">
+      <div className="px-3 py-3 border-b border-border">
+        <span className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
+          Tools
+        </span>
+      </div>
+      <div className="flex-1 flex items-center justify-center">
+        <p className="text-xs text-text-secondary italic">Tools will appear here.</p>
+      </div>
+    </div>
+  );
+}
+
 export function App() {
   const [showConnectionDialog, setShowConnectionDialog] = useState(false);
   const rightPanelVisible = useLayoutStore((s) => s.rightPanelVisible);
   const toggleRightPanel = useLayoutStore((s) => s.toggleRightPanel);
   const bottomPanelTab = useLayoutStore((s) => s.bottomPanelTab);
   const activeActivity = useLayoutStore((s) => s.activeActivity);
-  const editorTabs = useLayoutStore((s) => s.editorTabs);
-  const activeEditorTabId = useLayoutStore((s) => s.activeEditorTabId);
+  const topBarVisible = useLayoutStore((s) => s.topBarVisible);
+  const zenMode = useLayoutStore((s) => s.zenMode);
+  const agentPanelVisible = useLayoutStore((s) => s.agentPanelVisible);
+  const openModal = useLayoutStore((s) => s.openModal);
+  const setOpenModal = useLayoutStore((s) => s.setOpenModal);
+  const workspaceView = useWorkspaceView();
+
+  // Load persisted connections from DB on startup
+  useConnectionBootstrap();
 
   const sidebarContent = useMemo(() => {
     switch (activeActivity) {
+      case 'agentManager':
+        return <AgentManagerPanel />;
       case 'explorer':
-        return <ExplorerPanel onNewConnection={() => setShowConnectionDialog(true)} />;
+        return <ExplorerPanel />;
+      case 'sessionManager':
+        return <SessionManagerPanel />;
       case 'search':
         return <SearchPanel />;
+      case 'approvals':
+        return <ApprovalQueue />;
+      case 'tools':
+        return <ToolsPanel />;
       case 'sourceControl':
         return (
           <Suspense fallback={<Spinner label="Loading changes..." />}>
@@ -75,30 +117,18 @@ export function App() {
 
   const bottomContent = useMemo(() => {
     switch (bottomPanelTab) {
-      case 'terminal':
-        return (
-          <Suspense fallback={<Spinner label="Loading terminal..." />}>
-            <TerminalPane />
-          </Suspense>
-        );
+      case 'agentStdout':
+        return <AgentStdout />;
+      case 'mcpLogs':
+        return <McpLogs />;
+      case 'fileSync':
+        return <FileSyncPanel />;
+      case 'ports':
+        return <PortsPanel />;
       case 'problems':
         return (
           <div className="flex items-center justify-center h-full">
             <p className="text-xs text-text-secondary italic">No problems detected.</p>
-          </div>
-        );
-      case 'output':
-        return (
-          <div className="flex items-center justify-center h-full">
-            <p className="text-xs text-text-secondary italic">Output will appear here.</p>
-          </div>
-        );
-      case 'codeChanges':
-        return (
-          <div className="flex items-center justify-center h-full">
-            <p className="text-xs text-text-secondary italic">
-              Code changes summary — open files from Source Control to review diffs.
-            </p>
           </div>
         );
       default:
@@ -107,38 +137,58 @@ export function App() {
   }, [bottomPanelTab]);
 
   const mainContent = useMemo(() => {
-    const activeTab = editorTabs.find((t) => t.id === activeEditorTabId);
-    if (activeTab?.changeSetId) {
-      return (
-        <Suspense fallback={<Spinner label="Loading diff editor..." />}>
-          <CodeChangeEditor />
-        </Suspense>
-      );
-    }
-    return (
-      <div className="flex-1 flex flex-col items-center justify-center">
-        <div className="text-center space-y-4">
-          <div className="text-5xl text-text-secondary opacity-20">▸</div>
-          <div>
-            <p className="text-text-secondary text-sm font-medium">Remote AI IDE</p>
-            <p className="text-text-secondary text-xs mt-1">
-              Spawn a session or connect to a remote host to get started.
-            </p>
+    switch (workspaceView.kind) {
+      case 'diff':
+        return (
+          <Suspense fallback={<Spinner label="Loading diff editor..." />}>
+            <CodeChangeEditor />
+          </Suspense>
+        );
+      case 'file':
+        return (
+          <CodeEditor connectionId={workspaceView.connectionId} path={workspaceView.path} />
+        );
+      case 'empty':
+        return (
+          <div className="flex-1 flex flex-col items-center justify-center">
+            <div className="text-center space-y-4">
+              <div className="text-5xl text-text-secondary opacity-20">▸</div>
+              <div>
+                <p className="text-text-secondary text-sm font-medium">Remote AI IDE</p>
+                <p className="text-text-secondary text-xs mt-1">
+                  Open a file from the Explorer, or review an agent patch from Source Control.
+                </p>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
-    );
-  }, [editorTabs, activeEditorTabId]);
+        );
+    }
+  }, [workspaceView]);
+
+  const showChrome = !zenMode;
 
   return (
     <>
       <AppShell
+        topBar={showChrome && topBarVisible ? <MenuBar rightSlot={<ConnectionBadge />} /> : undefined}
         sidebar={
-          <SecondarySidebar>
-            {sidebarContent}
-          </SecondarySidebar>
+          showChrome ? (
+            <SecondarySidebar>
+              <div className="flex flex-col h-full">
+                <div className="flex-1 overflow-y-auto">{sidebarContent}</div>
+                <ApprovalQueue />
+              </div>
+            </SecondarySidebar>
+          ) : undefined
         }
         bottomPanelContent={bottomContent}
+        agentPanel={
+          showChrome && agentPanelVisible ? (
+            <AppShell.AgentColumn>
+              <AgentTerminalColumn />
+            </AppShell.AgentColumn>
+          ) : undefined
+        }
         statusBar={
           <AppShell.StatusBar>
             <StatusPanel onToggleDetail={toggleRightPanel} />
@@ -162,6 +212,14 @@ export function App() {
           <ConnectionDialog onClose={() => setShowConnectionDialog(false)} />
         </Suspense>
       )}
+
+      {openModal === 'agentBackend' && (
+        <Suspense fallback={null}>
+          <AgentBackendModal onClose={() => setOpenModal(null)} />
+        </Suspense>
+      )}
+
+      <TerminalDebugOverlay />
     </>
   );
 }

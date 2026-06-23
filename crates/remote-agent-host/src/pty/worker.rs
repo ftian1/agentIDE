@@ -101,8 +101,15 @@ pub fn run_pty_loop(
     let reader_registry = registry.clone();
     let sid = session_id.clone();
 
+    // Agent-stream parsing: only agent CLIs emit stream-json worth parsing.
+    // Bash/shell sessions produce raw terminal output only.
+    let parse_agent = matches!(session.tool, ToolKind::Claude | ToolKind::Custom(_));
+    let parse_tx = transport_tx.clone();
+
     let read_handle = std::thread::spawn(move || {
         let mut buf = vec![0u8; READ_CHUNK_SIZE];
+        let mut parser = parse_agent.then(|| crate::agent_parse::AgentStreamParser::new(sid.clone()));
+        let mut line_buf: Vec<u8> = Vec::new();
 
         loop {
             // Flow control check
@@ -120,6 +127,25 @@ pub fn run_pty_loop(
                     let seq = reader_session.next_seq();
                     let bytes = data.len();
                     reader_session.record_sent(bytes);
+
+                    // Feed the agent-stream parser line-by-line (newline-delimited
+                    // JSON). Raw terminal bytes still flow through unchanged.
+                    if let Some(parser) = parser.as_mut() {
+                        line_buf.extend_from_slice(&data);
+                        while let Some(pos) = line_buf.iter().position(|&b| b == b'\n') {
+                            let line: Vec<u8> = line_buf.drain(..=pos).collect();
+                            if let Ok(text) = std::str::from_utf8(&line) {
+                                for msg in parser.push_line(text) {
+                                    let _ = parse_tx.send(msg);
+                                }
+                            }
+                        }
+                        // Bound the partial-line buffer to avoid unbounded growth
+                        // on a stream that never emits a newline.
+                        if line_buf.len() > 1_048_576 {
+                            line_buf.clear();
+                        }
+                    }
 
                     let msg = ProtocolMessage::TerminalData {
                         session_id: sid.clone(),

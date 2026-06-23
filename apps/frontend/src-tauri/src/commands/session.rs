@@ -21,6 +21,7 @@ pub struct SpawnRequest {
     pub args: Vec<String>,
     pub cwd: Option<String>,
     pub env: Option<std::collections::HashMap<String, String>>,
+    pub container: Option<String>,
     #[serde(default = "default_cols")]
     pub terminal_cols: u16,
     #[serde(default = "default_rows")]
@@ -31,6 +32,7 @@ fn default_cols() -> u16 { 80 }
 fn default_rows() -> u16 { 24 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionInfo {
     pub id: String,
     pub connection_id: String,
@@ -39,6 +41,49 @@ pub struct SessionInfo {
     pub state: String,
     pub pid: u32,
     pub created_at: String,
+    // Fields with defaults — frontend expects these for session detail display
+    #[serde(default = "default_cols")]
+    pub cols: u16,
+    #[serde(default = "default_rows")]
+    pub rows: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub metadata: SessionMetadataDto,
+    #[serde(default)]
+    pub cost: CostBreakdownDto,
+    #[serde(default)]
+    pub turn_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionMetadataDto {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_repo: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CostBreakdownDto {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
+    #[serde(default)]
+    pub cost_usd: f64,
 }
 
 /// Tauri event payload for terminal data streams.
@@ -79,6 +124,29 @@ pub struct CodeChangeBatchEvent {
     pub file_count: u32,
 }
 
+/// Tauri event payload for agent stream events (thought/action/observation).
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentEventPayload {
+    pub session_id: String,
+    pub kind: String,
+    pub text: String,
+    pub code: Option<String>,
+    pub label: Option<String>,
+    pub status: Option<String>,
+    pub seq: u64,
+}
+
+/// Tauri event payload for agent approval requests.
+#[derive(Debug, Clone, Serialize)]
+pub struct ApprovalRequestEvent {
+    pub session_id: String,
+    pub request_id: String,
+    pub title: String,
+    pub scope: String,
+    pub command: String,
+    pub cwd: Option<String>,
+}
+
 #[tauri::command]
 pub async fn spawn_session(
     state: State<'_, AppState>,
@@ -86,8 +154,14 @@ pub async fn spawn_session(
     connection_id: String,
     req: SpawnRequest,
 ) -> Result<SessionInfo, String> {
-    let transport = state.agent_transport.read().await;
-    let transport = transport.as_ref().ok_or("No agent connected")?;
+    // Look up transport: prefer per-connection transport, fall back to local agent
+    let transport: Arc<dyn crate::transport::Transport> =
+        if let Some(t) = state.connection_transports.get(&connection_id) {
+            t.value().clone()
+        } else {
+            let t = state.agent_transport.read().await;
+            t.as_ref().cloned().ok_or("No agent connected")?
+        };
 
     let session_id = Uuid::new_v4().to_string();
     let tool = match req.tool.as_str() {
@@ -104,27 +178,32 @@ pub async fn spawn_session(
         cwd: req.cwd.clone(),
         terminal_cols: req.terminal_cols,
         terminal_rows: req.terminal_rows,
+        container: req.container.clone(),
     };
 
     transport.send(msg).await.map_err(|e| format!("Send failed: {}", e))?;
+    tracing::info!(%session_id, %connection_id, "SpawnSession sent, waiting for ack");
 
-    // Wait for SpawnSessionAck (with a simple polling approach)
+    // Wait for SpawnSessionAck
+    let transport_for_recv = transport.clone();
     let mut attempts = 0;
     loop {
-        match transport.recv().await.map_err(|e| format!("Recv failed: {}", e))? {
+        match transport_for_recv.recv().await.map_err(|e| format!("Recv failed: {}", e))? {
             Some(ProtocolMessage::SpawnSessionAck { session_id: sid, pid, tool_version }) => {
+                tracing::info!(ack_session = %sid, expected = %session_id, "Got SpawnSessionAck");
                 if sid == session_id {
-                    tracing::info!(%session_id, pid, "Session spawned");
+                    tracing::info!(%session_id, pid, "Session spawned — starting relay task");
 
-                    // Start a background task to relay terminal data for this session
-                    let transport_clone = state.agent_transport.read().await;
-                    if let Some(t) = transport_clone.as_ref().cloned() {
-                        let handle = app_handle.clone();
-                        let sid_clone = session_id.clone();
-                        tokio::spawn(async move {
-                            relay_session_output(t, handle, sid_clone).await;
-                        });
-                    }
+                    // Record session → connection mapping for write/resize/close
+                    state.session_connections.insert(session_id.clone(), connection_id.clone());
+
+                    let handle = app_handle.clone();
+                    let sid_clone = session_id.clone();
+                    let t_relay = transport.clone();
+                    tokio::spawn(async move {
+                        relay_session_output(t_relay, handle, sid_clone).await;
+                    });
+                    tracing::info!(%session_id, "Relay task spawned");
 
                     return Ok(SessionInfo {
                         id: session_id,
@@ -134,19 +213,42 @@ pub async fn spawn_session(
                         state: "running".into(),
                         pid,
                         created_at: chrono::Utc::now().to_rfc3339(),
+                        cols: req.terminal_cols,
+                        rows: req.terminal_rows,
+                        ended_at: None,
+                        exit_code: None,
+                        metadata: SessionMetadataDto {
+                            cwd: req.cwd.clone(),
+                            git_branch: None,
+                            git_repo: None,
+                            args: req.args.clone(),
+                        },
+                        cost: CostBreakdownDto::default(),
+                        turn_count: 0,
                     });
                 }
             }
             Some(ProtocolMessage::SpawnSessionNack { session_id: sid, reason }) => {
+                tracing::warn!(nack_session = %sid, %reason, "Got SpawnSessionNack");
                 if sid == session_id {
                     return Err(format!("Spawn failed: {}", reason));
                 }
             }
-            Some(_) => {} // Ignore other messages
+            Some(other) => {
+                if attempts < 5 {
+                    tracing::debug!(kind = other.kind(), %session_id, "Ignoring message while waiting for ack");
+                }
+            }
             None => {
                 attempts += 1;
-                if attempts > 100 {
-                    return Err("Timeout waiting for spawn response".into());
+                if attempts == 1 {
+                    tracing::warn!(%session_id, "recv() returned None — transport may not be receiving");
+                }
+                if attempts % 100 == 0 {
+                    tracing::warn!(%session_id, attempts, "Still waiting for SpawnSessionAck...");
+                }
+                if attempts > 600 {
+                    return Err("Timeout waiting for spawn response (30s)".into());
                 }
                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             }
@@ -161,18 +263,39 @@ async fn relay_session_output(
     app_handle: tauri::AppHandle,
     session_id: String,
 ) {
+    tracing::info!(%session_id, "Relay task started — listening for terminal output");
+
     let mut terminal_buf = String::new();
     let mut current_change_set_id: Option<String> = None;
+    let mut empty_polls: u64 = 0;
+    let mut msg_count: u64 = 0;
+    let mut terminal_count: u64 = 0;
+    let mut ignored_count: u64 = 0;
 
     loop {
         match transport.recv().await {
             Ok(Some(ProtocolMessage::TerminalData { session_id: sid, data, seq })) => {
-                if sid != session_id { continue; }
-                let _ = app_handle.emit("terminal:data", TerminalDataEvent {
+                msg_count += 1;
+                if sid != session_id {
+                    ignored_count += 1;
+                    if ignored_count <= 3 {
+                        tracing::debug!(msg_sid = %sid, relay_sid = %session_id, "Relay ignoring TerminalData for different session");
+                    }
+                    continue;
+                }
+                terminal_count += 1;
+                if terminal_count <= 5 || terminal_count % 50 == 0 {
+                    tracing::info!(%session_id, bytes = data.len(), seq, count = terminal_count, "Relay emitting terminal:data");
+                }
+
+                match app_handle.emit("terminal:data", TerminalDataEvent {
                     session_id: sid.clone(),
                     data: data.clone(),
                     seq,
-                });
+                }) {
+                    Ok(()) => {}
+                    Err(e) => tracing::error!(%session_id, error = %e, "Failed to emit terminal:data event"),
+                }
 
                 // Tier 2: buffer terminal output and scan for unified diffs
                 let text = String::from_utf8_lossy(&data);
@@ -184,7 +307,10 @@ async fn relay_session_output(
                 }
             }
             Ok(Some(ProtocolMessage::SessionEvent { session_id: sid, event_type, data, .. })) => {
+                msg_count += 1;
                 if sid != session_id { continue; }
+                tracing::info!(%session_id, ?event_type, "Relay emitting session:event");
+
                 let _ = app_handle.emit("session:event", SessionEventPayload {
                     session_id: sid.clone(),
                     event_type: format!("{:?}", event_type),
@@ -201,13 +327,50 @@ async fn relay_session_output(
                     }
                 }
             }
-            Ok(Some(ProtocolMessage::Pause { .. })) | Ok(Some(ProtocolMessage::Resume { .. })) => {
-                // Flow control events — forward to frontend
+            Ok(Some(ProtocolMessage::AgentEvent { session_id: sid, kind, text, code, label, status, seq })) => {
+                msg_count += 1;
+                if sid != session_id { continue; }
+                let _ = app_handle.emit("agent:event", AgentEventPayload {
+                    session_id: sid,
+                    kind: format!("{:?}", kind).to_lowercase(),
+                    text, code, label, status, seq,
+                });
             }
-            Ok(None) | Err(_) => break,
-            _ => {}
+            Ok(Some(ProtocolMessage::ApprovalRequest { session_id: sid, request_id, title, scope, command, cwd })) => {
+                msg_count += 1;
+                if sid != session_id { continue; }
+                tracing::info!(%session_id, %request_id, "Relay emitting approval:request");
+                let _ = app_handle.emit("approval:request", ApprovalRequestEvent {
+                    session_id: sid, request_id, title, scope, command, cwd,
+                });
+            }
+            Ok(Some(ProtocolMessage::CloseSessionAck { .. })) => {
+                tracing::info!(%session_id, "Relay received CloseSessionAck, exiting");
+                break;
+            }
+            Ok(Some(other)) => {
+                msg_count += 1;
+                if msg_count <= 5 {
+                    tracing::debug!(%session_id, kind = other.kind(), "Relay received other message");
+                }
+            }
+            Ok(None) => {
+                empty_polls += 1;
+                if empty_polls == 1 {
+                    tracing::info!(%session_id, "Relay first empty poll — transport has no data yet, will keep waiting");
+                }
+                if empty_polls % 200 == 0 {
+                    tracing::info!(%session_id, empty_polls, msg_count, terminal_count, "Relay still alive, waiting for data");
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, %session_id, msg_count, terminal_count, empty_polls, "Transport error, relay exiting");
+                break;
+            }
         }
     }
+    tracing::info!(%session_id, msg_count, terminal_count, "Relay task ended");
 }
 
 /// Tier 1: Detect code changes from structured SessionEvent data.
@@ -343,19 +506,37 @@ fn extract_diff_file_path(diff: &str) -> Option<String> {
     None
 }
 
+/// Resolve the transport for a given session by looking up its connection.
+fn resolve_session_transport(
+    state: &AppState,
+    session_id: &str,
+) -> Option<Arc<dyn crate::transport::Transport>> {
+    // Look up session → connection_id
+    let conn_id = state.session_connections.get(session_id)?.clone();
+    // Look up connection_id → transport
+    state.connection_transports.get(&conn_id).map(|r| r.value().clone())
+}
+
 #[tauri::command]
 pub async fn close_session(
     state: State<'_, AppState>,
     _connection_id: String,
     session_id: String,
 ) -> Result<(), String> {
-    let transport = state.agent_transport.read().await;
-    let transport = transport.as_ref().ok_or("No agent connected")?;
+    let transport = resolve_session_transport(&state, &session_id)
+        .or_else(|| {
+            // Fallback: try to close via agent_transport (local IPC sessions)
+            None
+        })
+        .ok_or_else(|| format!("No transport for session {}", session_id))?;
 
     transport
-        .send(ProtocolMessage::CloseSession { session_id })
+        .send(ProtocolMessage::CloseSession { session_id: session_id.clone() })
         .await
         .map_err(|e| format!("Send failed: {}", e))?;
+
+    // Clean up session mapping
+    state.session_connections.remove(&session_id);
 
     Ok(())
 }
@@ -368,8 +549,8 @@ pub async fn resize_terminal(
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let transport = state.agent_transport.read().await;
-    let transport = transport.as_ref().ok_or("No agent connected")?;
+    let transport = resolve_session_transport(&state, &session_id)
+        .ok_or_else(|| format!("No transport for session {}", session_id))?;
 
     transport
         .send(ProtocolMessage::TerminalResize { session_id, cols, rows })
@@ -386,8 +567,33 @@ pub async fn write_input(
     session_id: String,
     data: Vec<u8>,
 ) -> Result<(), String> {
-    let transport = state.agent_transport.read().await;
-    let transport = transport.as_ref().ok_or("No agent connected")?;
+    let transport = resolve_session_transport(&state, &session_id)
+        .ok_or_else(|| format!("No transport for session {}", session_id))?;
+
+    tracing::info!(%session_id, len = data.len(), "write_input: sending to agent");
+
+    transport
+        .send(ProtocolMessage::TerminalInput { session_id: session_id.clone(), data })
+        .await
+        .map_err(|e| format!("Send failed: {}", e))?;
+
+    tracing::info!(%session_id, "write_input: sent OK");
+
+    Ok(())
+}
+
+/// Send a chat message to the agent CLI (writes the text + newline to stdin).
+#[tauri::command]
+pub async fn send_agent_message(
+    state: State<'_, AppState>,
+    session_id: String,
+    text: String,
+) -> Result<(), String> {
+    let transport = resolve_session_transport(&state, &session_id)
+        .ok_or_else(|| format!("No transport for session {}", session_id))?;
+
+    let mut data = text.into_bytes();
+    data.push(b'\n');
 
     transport
         .send(ProtocolMessage::TerminalInput { session_id, data })

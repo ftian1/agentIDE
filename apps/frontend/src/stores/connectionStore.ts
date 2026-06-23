@@ -15,6 +15,7 @@ interface ConnectionStore {
   disconnect: (id: string) => Promise<void>;
   setActive: (id: string | null) => void;
   removeConnection: (id: string) => void;
+  loadConnections: () => Promise<void>;
 
   _addConnection: (info: ConnectionInfo) => void;
   _updateStatus: (id: string, status: ConnectionInfo['status'], error?: string) => void;
@@ -60,6 +61,24 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
         activeConnectionId: s.activeConnectionId === id ? null : s.activeConnectionId,
       };
     });
+  },
+
+  async loadConnections() {
+    try {
+      const list = await api.listConnections();
+      set((s) => {
+        const next = { ...s.connections };
+        for (const info of list) {
+          // Only restore if not already present
+          if (!next[info.id]) {
+            next[info.id] = info;
+          }
+        }
+        return { connections: next };
+      });
+    } catch (e) {
+      console.error('Failed to load persisted connections:', e);
+    }
   },
 
   _addConnection(info: ConnectionInfo) {

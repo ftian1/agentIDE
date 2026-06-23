@@ -21,7 +21,7 @@ pub enum ProtocolMessage {
     Error { code: ErrorCode, message: String, session_id: Option<String> },
     Goodbye { reason: Option<String> },
     // ── Session Lifecycle ─────────────────────────────────────
-    SpawnSession { session_id: String, tool: ToolKind, args: Vec<String>, env: std::collections::HashMap<String, String>, cwd: Option<String>, terminal_cols: u16, terminal_rows: u16 },
+    SpawnSession { session_id: String, tool: ToolKind, args: Vec<String>, env: std::collections::HashMap<String, String>, cwd: Option<String>, terminal_cols: u16, terminal_rows: u16, container: Option<String> },
     SpawnSessionAck { session_id: String, pid: u32, tool_version: Option<String> },
     SpawnSessionNack { session_id: String, reason: String },
     CloseSession { session_id: String },
@@ -46,6 +46,11 @@ pub enum ProtocolMessage {
     CodeChange { session_id: String, change_set_id: String, change_id: String, file_path: String, old_content: Option<String>, new_content: Option<String>, diff: String, seq: u64 },
     CodeChangeBatch { session_id: String, change_set_id: String, description: String, status: String, file_count: u32 },
     ApplyChange { session_id: String, file_path: String, content: String },
+    // ── Agent Stream Events ──────────────────────────────────
+    AgentEvent { session_id: String, kind: AgentEventKind, text: String, code: Option<String>, label: Option<String>, status: Option<String>, seq: u64 },
+    // ── Approval Flow ────────────────────────────────────────
+    ApprovalRequest { session_id: String, request_id: String, title: String, scope: String, command: String, cwd: Option<String> },
+    ApprovalResponse { session_id: String, request_id: String, decision: ApprovalDecision },
     // ── Keepalive ─────────────────────────────────────────────
     Ping { nonce: u64 },
     Pong { nonce: u64 },
@@ -81,6 +86,9 @@ impl ProtocolMessage {
             Self::CodeChange { .. } => "code_change",
             Self::CodeChangeBatch { .. } => "code_change_batch",
             Self::ApplyChange { .. } => "apply_change",
+            Self::AgentEvent { .. } => "agent_event",
+            Self::ApprovalRequest { .. } => "approval_request",
+            Self::ApprovalResponse { .. } => "approval_response",
             Self::Ping { .. } => "ping",
             Self::Pong { .. } => "pong",
         }
@@ -104,7 +112,10 @@ impl ProtocolMessage {
             | Self::SessionEvent { session_id, .. }
             | Self::CodeChange { session_id, .. }
             | Self::CodeChangeBatch { session_id, .. }
-            | Self::ApplyChange { session_id, .. } => Some(session_id),
+            | Self::ApplyChange { session_id, .. }
+            | Self::AgentEvent { session_id, .. }
+            | Self::ApprovalRequest { session_id, .. }
+            | Self::ApprovalResponse { session_id, .. } => Some(session_id),
             _ => None,
         }
     }
@@ -129,7 +140,7 @@ payload_struct!(HelloPayload { version: u32, capabilities: Vec<String>, session_
 payload_struct!(HelloAckPayload { version: u32, server_version: String, server_arch: String });
 payload_struct!(ErrorPayload { code: ErrorCode, message: String, session_id: Option<String> });
 payload_struct!(GoodbyePayload { reason: Option<String> });
-payload_struct!(SpawnSessionPayload { session_id: String, tool: ToolKind, args: Vec<String>, env: std::collections::HashMap<String, String>, cwd: Option<String>, terminal_cols: u16, terminal_rows: u16 });
+payload_struct!(SpawnSessionPayload { session_id: String, tool: ToolKind, args: Vec<String>, env: std::collections::HashMap<String, String>, cwd: Option<String>, terminal_cols: u16, terminal_rows: u16, container: Option<String> });
 payload_struct!(SpawnSessionAckPayload { session_id: String, pid: u32, tool_version: Option<String> });
 payload_struct!(SpawnSessionNackPayload { session_id: String, reason: String });
 payload_struct!(CloseSessionPayload { session_id: String });
@@ -149,6 +160,9 @@ payload_struct!(InstallCompletePayload { tool: ToolKind, success: bool, version:
 payload_struct!(CodeChangePayload { session_id: String, change_set_id: String, change_id: String, file_path: String, old_content: Option<String>, new_content: Option<String>, diff: String, seq: u64 });
 payload_struct!(CodeChangeBatchPayload { session_id: String, change_set_id: String, description: String, status: String, file_count: u32 });
 payload_struct!(ApplyChangePayload { session_id: String, file_path: String, content: String });
+payload_struct!(AgentEventPayload { session_id: String, kind: AgentEventKind, text: String, code: Option<String>, label: Option<String>, status: Option<String>, seq: u64 });
+payload_struct!(ApprovalRequestPayload { session_id: String, request_id: String, title: String, scope: String, command: String, cwd: Option<String> });
+payload_struct!(ApprovalResponsePayload { session_id: String, request_id: String, decision: ApprovalDecision });
 payload_struct!(PingPayload { nonce: u64 });
 payload_struct!(PongPayload { nonce: u64 });
 
@@ -184,8 +198,8 @@ impl ProtocolMessage {
                 rmp_serde::to_vec(&ErrorPayload { code: code.clone(), message: message.clone(), session_id: session_id.clone() }),
             Self::Goodbye { reason } =>
                 rmp_serde::to_vec(&GoodbyePayload { reason: reason.clone() }),
-            Self::SpawnSession { session_id, tool, args, env, cwd, terminal_cols, terminal_rows } =>
-                rmp_serde::to_vec(&SpawnSessionPayload { session_id: session_id.clone(), tool: tool.clone(), args: args.clone(), env: env.clone(), cwd: cwd.clone(), terminal_cols: *terminal_cols, terminal_rows: *terminal_rows }),
+            Self::SpawnSession { session_id, tool, args, env, cwd, terminal_cols, terminal_rows, container } =>
+                rmp_serde::to_vec(&SpawnSessionPayload { session_id: session_id.clone(), tool: tool.clone(), args: args.clone(), env: env.clone(), cwd: cwd.clone(), terminal_cols: *terminal_cols, terminal_rows: *terminal_rows, container: container.clone() }),
             Self::SpawnSessionAck { session_id, pid, tool_version } =>
                 rmp_serde::to_vec(&SpawnSessionAckPayload { session_id: session_id.clone(), pid: *pid, tool_version: tool_version.clone() }),
             Self::SpawnSessionNack { session_id, reason } =>
@@ -224,6 +238,12 @@ impl ProtocolMessage {
                 rmp_serde::to_vec(&CodeChangeBatchPayload { session_id: session_id.clone(), change_set_id: change_set_id.clone(), description: description.clone(), status: status.clone(), file_count: *file_count }),
             Self::ApplyChange { session_id, file_path, content } =>
                 rmp_serde::to_vec(&ApplyChangePayload { session_id: session_id.clone(), file_path: file_path.clone(), content: content.clone() }),
+            Self::AgentEvent { session_id, kind, text, code, label, status, seq } =>
+                rmp_serde::to_vec(&AgentEventPayload { session_id: session_id.clone(), kind: kind.clone(), text: text.clone(), code: code.clone(), label: label.clone(), status: status.clone(), seq: *seq }),
+            Self::ApprovalRequest { session_id, request_id, title, scope, command, cwd } =>
+                rmp_serde::to_vec(&ApprovalRequestPayload { session_id: session_id.clone(), request_id: request_id.clone(), title: title.clone(), scope: scope.clone(), command: command.clone(), cwd: cwd.clone() }),
+            Self::ApprovalResponse { session_id, request_id, decision } =>
+                rmp_serde::to_vec(&ApprovalResponsePayload { session_id: session_id.clone(), request_id: request_id.clone(), decision: decision.clone() }),
             Self::Ping { nonce } =>
                 rmp_serde::to_vec(&PingPayload { nonce: *nonce }),
             Self::Pong { nonce } =>
@@ -237,7 +257,7 @@ impl ProtocolMessage {
             "hello_ack" => { let p: HelloAckPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::HelloAck { version: p.version, server_version: p.server_version, server_arch: p.server_arch } }
             "error" => { let p: ErrorPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::Error { code: p.code, message: p.message, session_id: p.session_id } }
             "goodbye" => { let p: GoodbyePayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::Goodbye { reason: p.reason } }
-            "spawn_session" => { let p: SpawnSessionPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::SpawnSession { session_id: p.session_id, tool: p.tool, args: p.args, env: p.env, cwd: p.cwd, terminal_cols: p.terminal_cols, terminal_rows: p.terminal_rows } }
+            "spawn_session" => { let p: SpawnSessionPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::SpawnSession { session_id: p.session_id, tool: p.tool, args: p.args, env: p.env, cwd: p.cwd, terminal_cols: p.terminal_cols, terminal_rows: p.terminal_rows, container: p.container } }
             "spawn_session_ack" => { let p: SpawnSessionAckPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::SpawnSessionAck { session_id: p.session_id, pid: p.pid, tool_version: p.tool_version } }
             "spawn_session_nack" => { let p: SpawnSessionNackPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::SpawnSessionNack { session_id: p.session_id, reason: p.reason } }
             "close_session" => { let p: CloseSessionPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::CloseSession { session_id: p.session_id } }
@@ -257,6 +277,9 @@ impl ProtocolMessage {
             "code_change" => { let p: CodeChangePayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::CodeChange { session_id: p.session_id, change_set_id: p.change_set_id, change_id: p.change_id, file_path: p.file_path, old_content: p.old_content, new_content: p.new_content, diff: p.diff, seq: p.seq } }
             "code_change_batch" => { let p: CodeChangeBatchPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::CodeChangeBatch { session_id: p.session_id, change_set_id: p.change_set_id, description: p.description, status: p.status, file_count: p.file_count } }
             "apply_change" => { let p: ApplyChangePayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::ApplyChange { session_id: p.session_id, file_path: p.file_path, content: p.content } }
+            "agent_event" => { let p: AgentEventPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::AgentEvent { session_id: p.session_id, kind: p.kind, text: p.text, code: p.code, label: p.label, status: p.status, seq: p.seq } }
+            "approval_request" => { let p: ApprovalRequestPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::ApprovalRequest { session_id: p.session_id, request_id: p.request_id, title: p.title, scope: p.scope, command: p.command, cwd: p.cwd } }
+            "approval_response" => { let p: ApprovalResponsePayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::ApprovalResponse { session_id: p.session_id, request_id: p.request_id, decision: p.decision } }
             "ping" => { let p: PingPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::Ping { nonce: p.nonce } }
             "pong" => { let p: PongPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::Pong { nonce: p.nonce } }
             _ => return Err(format!("unknown tag: {}", tag)),
@@ -286,7 +309,7 @@ mod tests {
         let msg = ProtocolMessage::SpawnSession {
             session_id: "abc-123".into(),
             tool: ToolKind::Claude, args: vec![], env: Default::default(),
-            cwd: None, terminal_cols: 80, terminal_rows: 24,
+            cwd: None, terminal_cols: 80, terminal_rows: 24, container: None,
         };
         assert_eq!(msg.session_id(), Some("abc-123"));
     }
@@ -331,6 +354,79 @@ mod tests {
                 assert_eq!(session_id, "s2");
                 assert_eq!(data, vec![0x1b, 0x5b, 0x33, 0x31, 0x6d]);
                 assert_eq!(seq, 7);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_agent_event_roundtrip() {
+        let msg = ProtocolMessage::AgentEvent {
+            session_id: "s3".into(),
+            kind: AgentEventKind::Action,
+            text: "writing rollback logic".into(),
+            code: Some("None => install_cli(host, \"npm\").await?;".into()),
+            label: Some("写入 main.rs L11-L12".into()),
+            status: None,
+            seq: 12,
+        };
+        let buf = rmp_serde::to_vec(&msg).unwrap();
+        let recovered: ProtocolMessage = rmp_serde::from_slice(&buf).unwrap();
+        match recovered {
+            ProtocolMessage::AgentEvent { session_id, kind, text, code, label, status, seq } => {
+                assert_eq!(session_id, "s3");
+                assert_eq!(kind, AgentEventKind::Action);
+                assert_eq!(text, "writing rollback logic");
+                assert_eq!(code.unwrap(), "None => install_cli(host, \"npm\").await?;");
+                assert_eq!(label.unwrap(), "写入 main.rs L11-L12");
+                assert!(status.is_none());
+                assert_eq!(seq, 12);
+            }
+            _ => panic!("wrong variant"),
+        }
+        assert_eq!(msg.session_id(), Some("s3"));
+        assert_eq!(msg.kind(), "agent_event");
+    }
+
+    #[test]
+    fn test_approval_request_roundtrip() {
+        let msg = ProtocolMessage::ApprovalRequest {
+            session_id: "s4".into(),
+            request_id: "req-1".into(),
+            title: "Agent 申请执行".into(),
+            scope: "servers.cargo".into(),
+            command: "cargo build --release".into(),
+            cwd: Some("/myproject".into()),
+        };
+        let buf = rmp_serde::to_vec(&msg).unwrap();
+        let recovered: ProtocolMessage = rmp_serde::from_slice(&buf).unwrap();
+        match recovered {
+            ProtocolMessage::ApprovalRequest { session_id, request_id, title, scope, command, cwd } => {
+                assert_eq!(session_id, "s4");
+                assert_eq!(request_id, "req-1");
+                assert_eq!(title, "Agent 申请执行");
+                assert_eq!(scope, "servers.cargo");
+                assert_eq!(command, "cargo build --release");
+                assert_eq!(cwd.unwrap(), "/myproject");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_approval_response_roundtrip() {
+        let msg = ProtocolMessage::ApprovalResponse {
+            session_id: "s5".into(),
+            request_id: "req-2".into(),
+            decision: ApprovalDecision::AllowAll,
+        };
+        let buf = rmp_serde::to_vec(&msg).unwrap();
+        let recovered: ProtocolMessage = rmp_serde::from_slice(&buf).unwrap();
+        match recovered {
+            ProtocolMessage::ApprovalResponse { session_id, request_id, decision } => {
+                assert_eq!(session_id, "s5");
+                assert_eq!(request_id, "req-2");
+                assert_eq!(decision, ApprovalDecision::AllowAll);
             }
             _ => panic!("wrong variant"),
         }

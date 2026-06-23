@@ -187,7 +187,7 @@ async fn main() -> anyhow::Result<()> {
     send_msg!(ch, ProtocolMessage::SpawnSession {
         session_id: sid.into(), tool: ToolKind::Custom("echo".into()),
         args: vec!["Hello_from_SSH_remote!!!".into()],
-        env: Default::default(), cwd: None, terminal_cols: 80, terminal_rows: 24,
+        env: Default::default(), cwd: None, terminal_cols: 80, terminal_rows: 24, container: None,
     });
 
     // 8. Wait for SpawnAck

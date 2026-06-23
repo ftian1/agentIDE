@@ -12,6 +12,14 @@
         height: 100%; overflow: hidden;
         background: #0d1117; color: #e6edf3;
       }
+      /* Flashing red border for required fields (reconnect fallback) */
+      @keyframes flash-border {
+        0%, 100% { border-color: #f85149; box-shadow: 0 0 4px rgba(248,81,73,0.4); }
+        50% { border-color: #30363d; box-shadow: none; }
+      }
+      .field-highlight {
+        animation: flash-border 1.2s ease-in-out infinite;
+      }
     </style>
   </head>
   <body>

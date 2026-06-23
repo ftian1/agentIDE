@@ -16,10 +16,18 @@ serde = { version = "1", features = ["derive"] }
 rmp-serde = "1"
 byteorder = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "io-util", "io-std", "sync", "process", "signal", "time", "fs", "net"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 anyhow = "1"
 uuid = { version = "1", features = ["v4"] }
 dashmap = "6"
 chrono = "0.4"
+
+# Size-optimized release profile for all workspace crates.
+# Agent binary goes from ~4.5MB → ~2.5MB with these settings.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

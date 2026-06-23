@@ -35,7 +35,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   },
 
   async close(sessionId: string): Promise<void> {
-    await api.close(sessionId);
+    // Try to notify agent, but always clean up local state even if agent is gone
+    let _ = api.close(sessionId);
     set((s) => {
       const next = { ...s.sessions };
       delete next[sessionId];

@@ -23,11 +23,18 @@ export interface CodeChangeBatchEvent {
   file_count: number;
 }
 
+export interface FileEntry {
+  name: string;
+  path: string;
+  kind: 'file' | 'directory';
+}
+
 export interface TerminalApi {
   spawn(connectionId: string, req: SpawnRequest): Promise<SessionInfo>;
   write(sessionId: string, data: string): Promise<void>;
   resize(sessionId: string, cols: number, rows: number): Promise<void>;
   close(sessionId: string): Promise<void>;
+  listFiles(connectionId: string, path: string): Promise<FileEntry[]>;
 
   applyChange(sessionId: string, filePath: string, content: string): Promise<void>;
   rejectChange(changeId: string): Promise<void>;
@@ -39,6 +46,30 @@ export interface TerminalApi {
 }
 
 export function createTerminalApi(): TerminalApi {
+  // Eagerly listen for terminal:data events and buffer per session_id.
+  // Solves the race: relay emits events BEFORE TerminalInstance mounts.
+  const dataBuffers = new Map<string, Array<{ data: Uint8Array; seq: number }>>();
+  const dataListeners = new Set<(sid: string, data: Uint8Array, seq: number) => void>();
+
+  // Register the global listener ONCE, immediately — before any session exists.
+  listen<{ session_id: string; data: number[]; seq: number }>('terminal:data', (event) => {
+    const { session_id, data, seq } = event.payload;
+    const u8 = new Uint8Array(data);
+
+    // Notify all registered callbacks (active TerminalInstances)
+    for (const cb of dataListeners) {
+      cb(session_id, u8, seq);
+    }
+
+    // Also buffer for late-arriving TerminalInstances
+    let buf = dataBuffers.get(session_id);
+    if (!buf) {
+      buf = [];
+      dataBuffers.set(session_id, buf);
+    }
+    buf.push({ data: u8, seq });
+  });
+
   return {
     async spawn(connectionId: string, req: SpawnRequest): Promise<SessionInfo> {
       return invoke<SessionInfo>('spawn_session', {
@@ -48,6 +79,7 @@ export function createTerminalApi(): TerminalApi {
           args: req.args ?? [],
           cwd: req.cwd ?? null,
           env: req.env ?? null,
+          container: req.container ?? null,
           terminal_cols: 80,
           terminal_rows: 24,
         },
@@ -79,6 +111,10 @@ export function createTerminalApi(): TerminalApi {
       });
     },
 
+    async listFiles(connectionId: string, path: string): Promise<FileEntry[]> {
+      return invoke<FileEntry[]>('list_files', { connectionId, path });
+    },
+
     async applyChange(sessionId: string, filePath: string, content: string): Promise<void> {
       await invoke('apply_code_change', {
         sessionId,
@@ -94,12 +130,15 @@ export function createTerminalApi(): TerminalApi {
     },
 
     onData(cb: (sessionId: string, data: Uint8Array, seq: number) => void): UnlistenFn {
-      let unlisten: UnlistenFn | null = null;
-      listen<{ session_id: string; data: number[]; seq: number }>('terminal:data', (event) => {
-        const { session_id, data, seq } = event.payload;
-        cb(session_id, new Uint8Array(data), seq);
-      }).then((fn) => { unlisten = fn; });
-      return () => { unlisten?.(); };
+      // Replay buffered data immediately (data that arrived before mount)
+      for (const [sid, events] of dataBuffers) {
+        for (const ev of events) {
+          cb(sid, ev.data, ev.seq);
+        }
+      }
+      // Register for live events
+      dataListeners.add(cb);
+      return () => { dataListeners.delete(cb); };
     },
 
     onSessionEvent(

@@ -71,6 +71,7 @@ fn test_cat_session_echo() {
         cwd: None,
         terminal_cols: 80,
         terminal_rows: 24,
+        container: None,
     })).unwrap();
     stdin.flush().unwrap();
 

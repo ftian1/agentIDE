@@ -27,8 +27,7 @@ pub async fn run_bootstrap(
     app_handle: &AppHandle,
     connection_id: &str,
     session: &SshSession,
-    transport_tx: tokio::sync::mpsc::UnboundedSender<shared_protocol::ProtocolMessage>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<std::sync::Arc<crate::transport::ssh_channel::SshChannelTransport>> {
     let emit = |phase: &str, progress: f32, message: &str, error: Option<String>| {
         let _ = app_handle.emit("bootstrap:progress", BootstrapProgressEvent {
             connection_id: connection_id.to_string(),
@@ -50,21 +49,27 @@ pub async fn run_bootstrap(
     let arch = &info.arch;
     emit("detecting", 0.3, &format!("Detected: {} {}", info.platform, arch), None);
 
-    // Step 2: Check if we need to upload
-    let need_upload = info.agent_version.is_none();
+    // Step 2: Check if we need to upload — compare embedded SHA256 with remote SHA256
+    let binary = get_embedded(arch)
+        .ok_or_else(|| anyhow::anyhow!("Unsupported architecture: {}", arch))?;
+    let embedded_hash = binary.sha256_hex();
+
+    let need_upload = if info.agent_sha256.is_empty() {
+        tracing::info!("Agent not installed on remote, uploading");
+        true
+    } else if info.agent_sha256 == embedded_hash {
+        tracing::info!(remote_sha256 = %&info.agent_sha256[..16], embedded_sha256 = %&embedded_hash[..16], "Agent SHA256 matches, skipping upload");
+        false
+    } else {
+        tracing::info!(remote_sha256 = %&info.agent_sha256[..16], embedded_sha256 = %&embedded_hash[..16], "Agent SHA256 mismatch, re-uploading");
+        true
+    };
 
     if need_upload {
         emit("uploading", 0.4, "Preparing agent binary...", None);
 
-        let binary = get_embedded(arch)
-            .ok_or_else(|| {
-                let err = format!("Unsupported architecture: {}", arch);
-                emit("uploading", 0.4, &err, Some(err.clone()));
-                anyhow::anyhow!(err)
-            })?;
-
-        emit("uploading", 0.6, &format!("Uploading agent ({:.1} KB)...", binary.data.len() as f64 / 1024.0), None);
-        uploader::upload_agent(session, &binary).await
+        emit("uploading", 0.6, &format!("Uploading agent ({:.1} KB, sha256={}...)...", binary.data.len() as f64 / 1024.0, &embedded_hash[..16]), None);
+        uploader::upload_agent(session, &binary, &info.home_dir).await
             .map_err(|e| {
                 emit("uploading", 0.6, "Upload failed", Some(e.to_string()));
                 e
@@ -75,9 +80,9 @@ pub async fn run_bootstrap(
         emit("uploading", 0.8, "Agent already installed, skipping upload", None);
     }
 
-    // Step 3: Start the agent
+    // Step 3: Start the agent (use absolute path from detection)
     emit("starting", 0.85, "Starting agent on remote host...", None);
-    uploader::start_agent(session, transport_tx).await
+    let transport = uploader::start_agent(session, &info.home_dir).await
         .map_err(|e| {
             emit("starting", 0.85, "Failed to start agent", Some(e.to_string()));
             e
@@ -91,5 +96,5 @@ pub async fn run_bootstrap(
 
     tracing::info!(connection_id = %connection_id, "Bootstrap complete");
 
-    Ok(())
+    Ok(transport)
 }

@@ -191,3 +191,27 @@ pub struct CostBreakdown {
     pub cache_write_tokens: u64,
     pub cost_usd: f64,
 }
+
+/// Kind of agent reasoning block surfaced from the agent CLI's structured stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentEventKind {
+    /// Model reasoning / thinking text.
+    Thought,
+    /// A tool invocation (edit_file, bash, etc.).
+    Action,
+    /// A tool result / observation.
+    Observation,
+}
+
+/// User's decision on an agent permission request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ApprovalDecision {
+    /// Allow this single request.
+    Allow,
+    /// Allow this and all future requests of the same kind.
+    AllowAll,
+    /// Reject this request.
+    Reject,
+}

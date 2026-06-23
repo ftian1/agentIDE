@@ -24,6 +24,8 @@ function persistLayout(state: Partial<LayoutStore>) {
       'bottomPanelVisible',
       'secondarySidebarVisible',
       'bottomPanelTab',
+      'topBarVisible',
+      'agentPanelVisible',
     ]) {
       const k = key as keyof LayoutStore;
       if (state[k] !== undefined) toSave[key] = state[k];
@@ -32,8 +34,9 @@ function persistLayout(state: Partial<LayoutStore>) {
   } catch { /* ignore */ }
 }
 
-export type ActivityId = 'explorer' | 'search' | 'sourceControl' | 'settings';
-export type BottomPanelTab = 'terminal' | 'problems' | 'output' | 'codeChanges';
+export type ActivityId = 'agentManager' | 'explorer' | 'sessionManager' | 'search' | 'approvals' | 'tools' | 'sourceControl' | 'settings';
+export type BottomPanelTab = 'agentStdout' | 'mcpLogs' | 'fileSync' | 'problems' | 'ports';
+export type ModalId = 'agentBackend';
 
 export interface EditorTab {
   id: string;
@@ -41,12 +44,26 @@ export interface EditorTab {
   label: string;
   icon?: 'add' | 'modify' | 'delete';
   changeSetId?: string;
+  /** When set, this tab opens a remote file in the editable code editor. */
+  connectionId?: string;
 }
 
 export interface LayoutStore {
   // Activity bar
   activeActivity: ActivityId;
   setActiveActivity: (id: ActivityId) => void;
+
+  // Top menu bar
+  topBarVisible: boolean;
+  toggleTopBar: () => void;
+
+  // Zen mode (hide all chrome)
+  zenMode: boolean;
+  toggleZenMode: () => void;
+
+  // Modal overlay
+  openModal: ModalId | null;
+  setOpenModal: (id: ModalId | null) => void;
 
   // Secondary sidebar
   secondarySidebarVisible: boolean;
@@ -62,10 +79,18 @@ export interface LayoutStore {
   toggleBottomPanel: () => void;
   setBottomPanelHeight: (h: number) => void;
 
-  // Right panel
+  // Bottom panel — dedicated bash session
+  bottomPanelSessionId: string | null;
+  setBottomPanelSessionId: (id: string | null) => void;
+
+  // Right panel (session detail)
   rightPanelVisible: boolean;
   setRightPanelVisible: (v: boolean) => void;
   toggleRightPanel: () => void;
+
+  // Agent panel (right-side Claude Code conversation)
+  agentPanelVisible: boolean;
+  toggleAgentPanel: () => void;
 
   // Editor tabs
   editorTabs: EditorTab[];
@@ -80,6 +105,20 @@ const persisted = loadPersisted();
 export const useLayoutStore = create<LayoutStore>((set) => ({
   activeActivity: 'explorer',
   setActiveActivity: (id) => set({ activeActivity: id }),
+
+  topBarVisible: persisted.topBarVisible ?? true,
+  toggleTopBar: () =>
+    set((s) => {
+      const v = !s.topBarVisible;
+      persistLayout({ topBarVisible: v });
+      return { topBarVisible: v };
+    }),
+
+  zenMode: false,
+  toggleZenMode: () => set((s) => ({ zenMode: !s.zenMode })),
+
+  openModal: null,
+  setOpenModal: (id) => set({ openModal: id }),
 
   secondarySidebarVisible: persisted.secondarySidebarVisible ?? true,
   secondarySidebarWidth: persisted.secondarySidebarWidth ?? 260,
@@ -97,7 +136,11 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
 
   bottomPanelVisible: persisted.bottomPanelVisible ?? true,
   bottomPanelHeight: persisted.bottomPanelHeight ?? 220,
-  bottomPanelTab: (persisted.bottomPanelTab as BottomPanelTab) ?? 'terminal',
+  bottomPanelTab: (() => {
+    const valid: BottomPanelTab[] = ['agentStdout', 'mcpLogs', 'fileSync', 'problems', 'ports'];
+    const p = persisted.bottomPanelTab as BottomPanelTab | undefined;
+    return p && valid.includes(p) ? p : 'agentStdout';
+  })(),
   setBottomPanelTab: (tab) => {
     persistLayout({ bottomPanelTab: tab });
     set({ bottomPanelTab: tab, bottomPanelVisible: true });
@@ -114,10 +157,21 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
     set({ bottomPanelHeight: clamped });
   },
 
+  bottomPanelSessionId: null,
+  setBottomPanelSessionId: (id) => set({ bottomPanelSessionId: id }),
+
   rightPanelVisible: false,
   setRightPanelVisible: (v) => set({ rightPanelVisible: v }),
   toggleRightPanel: () =>
     set((s) => ({ rightPanelVisible: !s.rightPanelVisible })),
+
+  agentPanelVisible: persisted.agentPanelVisible ?? true,
+  toggleAgentPanel: () =>
+    set((s) => {
+      const v = !s.agentPanelVisible;
+      persistLayout({ agentPanelVisible: v });
+      return { agentPanelVisible: v };
+    }),
 
   editorTabs: [],
   activeEditorTabId: null,

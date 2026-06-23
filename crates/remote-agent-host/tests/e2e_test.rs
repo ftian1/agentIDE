@@ -110,6 +110,7 @@ fn test_spawn_session_and_read_output() {
         cwd: None,
         terminal_cols: 80,
         terminal_rows: 24,
+        container: None,
     });
 
     // Read SpawnSessionAck

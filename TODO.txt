@@ -1,0 +1,248 @@
+# Remote AI IDE — TODO
+# Last updated: 2026-06-19
+# ✅ = done, ⬜ = not yet
+
+## Remote Platform Support
+
+### ✅ Linux x86_64 (remote agent host)
+- remote-agent-host binary built and embedded (3.4MB real binary)
+- Bootstrap flow: SSH connect → detect → upload → chmod +x → start agent
+- Auto-install of agent CLIs via `ensure_tool_installed()` (which → npm install -g)
+
+### ⬜ Linux aarch64
+- remote-agent-host binary is 12-byte stub, need real cross-compiled build
+
+### ⬜ macOS (remote agent host)
+- portable-pty crate supports macOS PTY, so the agent binary could run on macOS
+- Need to:
+  1. Add Rust cross-compilation targets: x86_64-apple-darwin, aarch64-apple-darwin
+  2. Build and embed remote-agent-host binaries for macOS
+  3. Fix bootstrap commands for macOS compatibility:
+     - "base64 -d" → "base64 -D" on macOS
+     - uname -m returns "arm64" on Apple Silicon (currently expected "aarch64")
+     - Test SSH + bootstrap flow on macOS remote
+  4. Update uploader.rs get_embedded() to include darwin arch variants
+
+### ⬜ Windows (as remote machine)
+- Windows has no POSIX PTY (uses ConPTY instead)
+- Would require: ConPTY implementation, different transport, PowerShell bootstrap, PE/EXE binary
+
+## Agent CLI Support
+
+### ✅ Claude Code CLI (claude)
+- Auto-install: `npm install -g @anthropic-ai/claude-code`
+- Mapped to `ToolKind::Claude`, command: `claude`
+
+### ✅ GitHub Copilot CLI (copilot)
+- Auto-install: `npm install -g @github/copilot-cli`
+- Mapped to `ToolKind::Copilot`, command: `gh copilot`
+
+### ⬜ Candidates
+- Codex CLI (OpenAI)
+- Gemini CLI (Google)
+- Windsurf / Cursor CLI
+- Generic shell commands (bash, zsh, etc.)
+
+## Docker Container Support
+
+### ✅ Approach A: Agent on host, CLI in container
+- remote-agent-host runs on host, CLI runs via `docker exec -it <container> <cmd>`
+- `SpawnSession` message includes `container: Option<String>`
+- Frontend AgentManager connect form has collapsible "Run in Container" section
+- localStorage caches container settings
+
+## SSH Authentication
+
+### ✅ Password authentication
+### ✅ SSH Key (ed25519, RSA)
+### ✅ SSH Agent forwarding
+
+### ⬜ SSH config file parsing (~/.ssh/config)
+- list_ssh_configs returns empty vec
+
+### ⬜ known_hosts verification
+- Currently accept all server keys unconditionally
+
+### ⬜ Jump host / bastion support
+
+## Connection Persistence
+
+### ✅ SQLite persistence
+- Connections saved to DB on connect
+- Restored to memory on app startup (db.load_connections() in setup)
+- Frontend calls loadConnections() on mount
+
+### ✅ localStorage form cache
+- Form inputs cached under `agentMgr:*` keys (host, port, user, agentType, container)
+- Password intentionally NOT cached
+- Loaded on form mount, saved on "Confirm & Connect"
+
+## Transport Architecture
+
+### ✅ Per-connection transport map
+- `DashMap<String, Arc<dyn Transport>>` in AppState
+- spawn_session looks up by connection_id, fallback to local agent_transport
+
+### ✅ SSH channel transport
+- `SshChannelTransport` wraps SSH channel with MessagePack framing
+- ✅ Single-actor design (tokio::select!) — fixes deadlock in original reader+writer+Arc<Mutex> design
+- Live tests pass: SSH connect, upload+spawn, terminal roundtrip
+
+### ✅ serde camelCase convention
+- Rust structs use `#[serde(rename_all = "camelCase")]` to match frontend
+
+## Bootstrap
+
+### ✅ SSH connect wired to actual SSH + bootstrap
+- connect command: SSH establish → bootstrap (detect → upload → start) → store transport
+
+### ✅ remote-agent-host uploaded on first connect
+- ✅ Raw binary upload via SSH channel (single `data_bytes` call, no base64/chunk/sleep)
+- Skips upload if agent already installed (version check)
+- Upload speed: ~1 RTT for 1.7MB binary (was 35+ RTT with base64 chunked echo)
+
+### ✅ Upload latency fix — disable Nagle + fuse round-trips
+- ✅ `ssh.rs::connect` sets `config.nodelay = true` — Nagle was the real cause of
+  ~8s upload (1.8MB / 8s ≈ 228 KB/s, far below bandwidth). Main speedup.
+- ✅ Fused upload round-trips: `mkdir -p && cat > tmp` in one channel (new
+  `ssh::upload_raw_cmd`), then a single exec for `stat verify + atomic mv + chmod`.
+  Was 4 separate SSH channels (4 RTT) → now 2.
+- See design.md §4.17
+
+### ⬜ Optional: gzip-compressed upload for high-latency/WAN links
+- Binary gzips to ~780KB (−57%). Would help over public internet, not LAN.
+- `upload_raw_cmd` already accepts a custom command — pipe `gzip -dc > tmp` on the
+  remote and pass locally-gzipped bytes. Deferred: not a bottleneck post-Nagle fix.
+
+### ⬜ Optional: replace 50ms recv() polling with awaited recv
+- spawn_session / relay_session_output poll `try_recv()` + sleep 50ms, adding up to
+  50ms latency per message round-trip ("read session" feel).
+- Blocked on: spawn-timeout counter assumes 50ms ticks (600 ticks = 30s); changing
+  recv() to block would need that timeout reworked. Low payoff, deferred.
+
+### ⬜ Bootstrap progress events in frontend
+- `bootstrap:progress` events are emitted but not displayed in AgentManager connect form
+- User sees hardcoded log messages instead of real progress
+
+### ⬜ Agent version upgrade on reconnect
+- Currently only uploads if not installed; no version comparison
+
+## Agent Auto-Install
+
+### ✅ Tool detection + auto-install
+- `ensure_tool_installed()` in remote-agent-host server.rs
+- `which <tool>` → npm install → verify
+- ✅ Fixed: Node.js download to ~ (was /tmp, which was full)
+- ✅ Fixed: tar --strip-components=1 extract (was cp of individual bins, broke npm symlinks)
+- ✅ Fixed: npm verification before returning Ok (catches broken prior partial installs)
+- ✅ Fixed: error messages now include actual failure reason (disk full, permission denied, etc.)
+- ✅ Live test coverage: live_probe_test.rs exercises Probe + Install APIs for Claude/Copilot
+
+### ⬜ npm install progress streaming to frontend
+- Currently blocks until install completes, no streaming progress
+
+### ⬜ pnpm/yarn fallback if npm not available
+### ⬜ Show pre-installed version info before offering auto-install
+
+## Session / Transport
+
+### ✅ Session terminal in main content area
+- TerminalPane now renders in main content (App.tsx mainContent) when active session exists
+- Was previously only in bottom panel — invisible when panel collapsed or tab not selected
+
+### ⬜ Multi-connection session differentiation in frontend
+- Transports stored per connection_id but SessionManager doesn't differentiate well
+
+### ⬜ Session reconnect after SSH disconnection
+- SSH disconnection kills all sessions; no session persistence
+
+### ⬜ Session history display
+- Sessions stored in DB but never queried or displayed in the UI
+
+## Frontend
+
+### ✅ 启动黑屏修复（design.md §4.19）
+- 根因：§4.16 白屏修复把"窗口可见"耦合到"JS 成功"，启动期任何崩溃 → 永久黑屏掩盖真实错误
+- ✅ tauri.conf.json 改回 visible:true（保留深色 backgroundColor 仍防白闪）
+- ✅ 新增 ErrorBoundary 包裹 App：崩溃显示红色错误屏+堆栈而非黑屏
+- ✅ main.tsx 移除 getCurrentWindow().show() 与 window 静态 import；init listeners 各包 safeInit try/catch
+- ⬜ 真机验证：本环境无法跑 Windows exe，只保证故障模式从"黑屏"变"错误屏"；若仍异常，按错误屏堆栈定位
+
+### ⬜ 重做"终端归位"（上一轮成果被工作区回退弄丢，design.md §4.19 旧版）
+- 丢失文件：agentpanel/AgentColumnPanel.tsx（右列双标签 视觉交互层/原生终端）、bottom/BottomTerminal.tsx（底部用户 bash）
+- 回退后状态：App.tsx 仍引用 AgentTerminalColumn（已复活），右列=纯终端列，底部无 bash 终端标签
+- 需重做：右列双标签 + 底部 Bash 终端标签 + PanelTabBar 加 'terminal' + pty/worker.rs parse_agent 排除 bash/sh/zsh/fish
+- 注意：contextFileStore/perfStore/lib/diff.ts/CodeChangeEditor 等仍在，未丢
+
+### ✅ UI Layout 与底层代码分离（三层架构 — design.md §4.13 + §4.14）
+- 目标：布局可独立迭代而不碰业务逻辑，对齐 Penpot 初稿（page 2「Agent IDE — GUI Layout」）
+- ✅ 第 2 层：headless hooks（useWorkspaceView/useConnectionBootstrap/useApprovalQueue/
+  useAgentConversation/useFileBuffer/useMenuCommands），组件不直读业务 store
+- ✅ 第 3 层：AppShell 扩出 `topBar` 槽位（菜单栏+搜索+SSH 状态）+ `agentPanel` 右栏槽位
+- ✅ 新 region 组件全部补齐（对齐 Penpot board 命名）：MenuBar(5 下拉)+GlobalSearch+ConnectionBadge、
+  ApprovalQueue/ApprovalCard、AgentPanel(THOUGHT/ACTION/OBSERVATION)/AgentTurn/AgentInput、
+  CodeEditor(可编辑+保存)、底部 5 Tab（AgentStdout/McpLogs/FileSync/问题/端口）、AgentBackendModal(3 Tab)
+- ✅ Design Tokens：复用既有语义 token（bg-bg-*/text-text-*/border/accent），新组件只消费
+- ⬜ 底部 MCP 日志 / 文件同步 / 端口 面板目前是空态脚手架 — 需各自后端数据源接线
+- ⬜ MenuBar 部分动作仍是 stub（Model Route Override / Split Editor Right / Zen Mode 仅 toggle /
+  Docs/Shortcuts/Release/About）— 待逐个接线
+- ⬜ GlobalSearch 未接命令面板 / 文件搜索 / ask-Agent
+- ⬜ ConnectionBadge 延迟为静态 "12ms" 占位 — 需真实 SSH 往返延迟
+
+### ⬜ Agent 流解析端到端验证（design.md §4.14）
+- agent_parse.rs 解析器有 9 个离线单测，但真实 Claude Code stream-json 的端到端正确性需 live agent CLI 验证
+- read_file/write_file、respond_approval、send_agent_message 的真实远程行为需 live SSH 测试
+
+### ✅ ActivityBar with new icons
+- Agent Manager (Bot) at top, File Explorer (FolderTree), Session Manager (MonitorPlay)
+- Plus Search, Source Control, Settings
+
+### ✅ 三区工作台：行内 Patch 预览 / 终端右置 / 上下文一览 / 状态栏监视器 (design.md §4.18)
+- ✅ ① 行内 Patch 预览 + 行侧 ✓/✗ 逐 hunk 接受：lib/diff.ts (LCS 行 diff + reconstruct, 19 断言验证),
+  CodeChangeEditor 改自研行内渲染, codeChangeStore.applyAcceptedHunks 经 write_file 落盘
+- ✅ ② 布局对调：editor 居中, AgentTerminalColumn (TerminalPane) 右置; useWorkspaceView 删 terminal 中心视图
+- ✅ ③ Show Active Files 下拉：contextFileStore 从 agent:event Action 派生; agent_parse 给 Read 补 path 标签;
+  ActiveFilesMenu UI; 踢出=UI 移除 + 预留升级口 (kickFile action)
+- ✅ ④ 状态栏：节点 + deriveAgentActivity ([Executing Tool: X]) + 远程 perf 监视器
+  (connection/perf.rs 定时 exec /proc, perfStore, 4 Rust 单测)
+
+### ⬜ ③ 上下文"踢出"升级为真驱逐 (当前仅 UI 移除)
+- kickFile 现在只把路径加入 kicked 集合从展示过滤; 升级点已在 store 标注
+- 若要真影响 agent 上下文: 在 kickFile 内向 agent stdin/命令发指令 (CLI 须能理解, 效果不保证)
+
+### ⬜ AgentPanel (对话面板) 在新布局下无槽位
+- 终端右置后, 原右列的 AgentPanel (Claude Code 对话) 暂无显示位置; 组件保留未删
+- 需决定: 是否给对话面板新增可切换槽位 (如底部 tab 或与终端并列)
+
+### ⬜ 修复 pre-existing 测试 ipc_transport_test.rs (与本次无关)
+- tests/ipc_transport_test.rs:79 SpawnSession 缺 container 字段, 早前协议改动遗留, 致 cargo test 全量编译失败
+- lib 单测正常 (cargo test --lib 通过)
+
+### ✅ AgentManager two-level panel
+- Level 1: "Connect New Agent" button + saved connections + per-machine sessions
+- Level 2: SSH connect form with Docker container option
+
+### ✅ FileBrowser default expanded
+- No collapse by default, all directories expanded
+
+### ✅ SessionManager centralized hub
+- Active/ended sessions, spawn bar, per-session machine info
+
+### ⬜ FileBrowser remote file listing API
+- Shows hardcoded default tree — needs actual remote file listing
+
+### ⬜ AgentManager "Reconnect" button on saved connections
+- Currently only "Connect New Agent" re-enters form
+
+### ⬜ Password keychain integration
+- Password not cached (security choice), could offer OS keychain
+
+### ⬜ Dark/light theme toggle
+
+## Protocol
+
+### ⬜ Flow control (ack/backpressure) end-to-end
+- Defined in protocol but not implemented end-to-end
+
+### ⬜ Agent-to-desktop events
+- turn_start, turn_end, tool_call, tool_result defined but not wired

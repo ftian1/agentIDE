@@ -9,7 +9,7 @@ name = "remote_ai_ide_lib"
 crate-type = ["lib", "staticlib"]
 
 [features]
-default = []
+default = ["ssh"]
 ssh = ["russh", "ssh-key", "base64", "shell-words"]
 
 [build-dependencies]
@@ -41,4 +41,5 @@ which = "7"
 russh = { version = "0.61", optional = true }
 ssh-key = { version = "0.6", features = ["ed25519"], optional = true }
 base64 = { version = "0.22", optional = true }
+sha2 = "0.10"
 shell-words = { version = "1", optional = true }

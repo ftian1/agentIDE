@@ -63,6 +63,7 @@ pub struct RemoteHostInfo {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConnectionInfo {
     pub id: String,
     pub label: String,
@@ -75,6 +76,7 @@ pub struct ConnectionInfo {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RemoteInfo {
     pub arch: String,
     pub agent_version: String,
@@ -152,29 +154,29 @@ impl ConnectionManager {
         Some(*attempt)
     }
 
-    pub fn list(&self) -> Vec<ConnectionInfo> {
-        self.connections
-            .iter()
-            .map(|item| {
-                let conn = item.value();
-                let status = conn.status.blocking_read();
-                ConnectionInfo {
-                    id: conn.id.clone(),
-                    label: conn.label.clone(),
-                    host: conn.host.clone(),
-                    port: conn.port,
-                    user: conn.user.clone(),
-                    status: status_to_string(&status),
-                    error: match &*status {
-                        ConnectionStatus::Error(e) => Some(e.clone()),
-                        _ => None,
-                    },
-                    remote_info: conn.remote_info.blocking_read().as_ref().map(|r| RemoteInfo {
-                        arch: r.arch.clone(),
-                        agent_version: r.agent_version.clone().unwrap_or_default(),
-                    }),
-                }
-            })
-            .collect()
+    pub async fn list(&self) -> Vec<ConnectionInfo> {
+        let mut infos = Vec::new();
+        for item in self.connections.iter() {
+            let conn = item.value();
+            let status = conn.status.read().await;
+            let remote = conn.remote_info.read().await;
+            infos.push(ConnectionInfo {
+                id: conn.id.clone(),
+                label: conn.label.clone(),
+                host: conn.host.clone(),
+                port: conn.port,
+                user: conn.user.clone(),
+                status: status_to_string(&status),
+                error: match &*status {
+                    ConnectionStatus::Error(e) => Some(e.clone()),
+                    _ => None,
+                },
+                remote_info: remote.as_ref().map(|r| RemoteInfo {
+                    arch: r.arch.clone(),
+                    agent_version: r.agent_version.clone().unwrap_or_default(),
+                }),
+            });
+        }
+        infos
     }
 }

@@ -82,4 +82,5 @@ export interface SpawnRequest {
   args?: string[];
   cwd?: string;
   env?: Record<string, string>;
+  container?: string;
 }
