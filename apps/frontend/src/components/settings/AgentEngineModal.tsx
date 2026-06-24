@@ -14,6 +14,7 @@ import { useConnectionStore } from '../../stores/connectionStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useLayoutStore } from '../../stores/layoutStore';
 import { useLlmProviderStore } from '../../stores/llmProviderStore';
+import { log } from '../../lib/debugLog';
 import {
   useAgentEngineStore,
   type AgentKind,
@@ -189,6 +190,8 @@ export function AgentEngineModal({ onClose }: Props) {
         }
       }
 
+      const launchEnv = Object.keys(env).length > 0 ? env : {};
+      log('system', 'Launch env: ' + JSON.stringify(launchEnv));
       const sessionInfo = await spawn(connId, {
         tool: meta.tool,
         args,

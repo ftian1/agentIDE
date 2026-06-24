@@ -154,40 +154,62 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Parse --log-file <path> for persistent debug logging
-    let log_file = {
+    // Parse --log-file <path> and --log-level <level> for persistent debug logging
+    let (log_file, log_level) = {
         let args: Vec<String> = std::env::args().collect();
         let mut log_path = None;
+        let mut level = "info".to_string();
         let mut i = 1;
         while i < args.len() {
             if args[i] == "--log-file" && i + 1 < args.len() {
                 log_path = Some(args[i + 1].clone());
                 i += 1;
+            } else if args[i] == "--log-level" && i + 1 < args.len() {
+                level = args[i + 1].clone();
+                i += 1;
             }
             i += 1;
         }
-        log_path
+        (log_path, level)
     };
 
-    // Set up logging: always to stderr, optionally also to a file.
-    let file_log = log_file.clone();
-    if let Some(path) = file_log {
-        let file = std::fs::File::create(&path)
-            .unwrap_or_else(|_| panic!("Failed to create log file: {}", path));
-        tracing_subscriber::fmt()
-            .with_writer(std::io::stderr)
-            .with_env_filter(
-                EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| EnvFilter::new("info")),
-            )
-            .with_target(false)
-            .with_ansi(false)
-            .init();
-        // Also write a marker to the file so we know logging works
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().append(true).open(&path)
-            .unwrap_or_else(|_| panic!("Failed to open log file: {}", path));
-        let _ = writeln!(f, "Agent starting pid={}", std::process::id());
+    // Dual-writer: writes to both stderr (SSH channel) and a file.
+    struct DualWriter {
+        file: std::sync::Mutex<std::fs::File>,
+    }
+    impl std::io::Write for DualWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let _ = std::io::stderr().write_all(buf);
+            self.file.lock().unwrap().write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            let _ = std::io::stderr().flush();
+            self.file.lock().unwrap().flush()
+        }
+    }
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(&log_level));
+
+    if let Some(path) = log_file {
+        match std::fs::File::create(&path) {
+            Ok(file) => {
+                tracing_subscriber::fmt()
+                    .with_writer(std::sync::Mutex::new(DualWriter { file: std::sync::Mutex::new(file) }))
+                    .with_env_filter(env_filter)
+                    .with_target(false)
+                    .with_ansi(false)
+                    .init();
+            }
+            Err(_) => {
+                tracing_subscriber::fmt()
+                    .with_writer(std::io::stderr)
+                    .with_env_filter(env_filter)
+                    .with_target(false)
+                    .with_ansi(false)
+                    .init();
+            }
+        }
     } else {
         // Fallback: write log to ~/.remote-agent-host/agent.log
         let default_log = std::env::var("HOME")
@@ -198,22 +220,15 @@ async fn main() -> anyhow::Result<()> {
             Ok(file) => {
                 tracing_subscriber::fmt()
                     .with_writer(std::sync::Mutex::new(file))
-                    .with_env_filter(
-                        EnvFilter::try_from_default_env()
-                            .unwrap_or_else(|_| EnvFilter::new("info")),
-                    )
+                    .with_env_filter(env_filter)
                     .with_target(false)
                     .with_ansi(false)
                     .init();
             }
             Err(_) => {
-                // Can't create log file — fall back to stderr only
                 tracing_subscriber::fmt()
                     .with_writer(std::io::stderr)
-                    .with_env_filter(
-                        EnvFilter::try_from_default_env()
-                            .unwrap_or_else(|_| EnvFilter::new("info")),
-                    )
+                    .with_env_filter(env_filter)
                     .with_target(false)
                     .with_ansi(false)
                     .init();
