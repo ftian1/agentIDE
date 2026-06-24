@@ -2,11 +2,16 @@
 const EXT_TO_LANG: Record<string, string> = {
   ts: 'typescript',
   tsx: 'typescript',
+  mts: 'typescript',
+  cts: 'typescript',
   js: 'javascript',
   jsx: 'javascript',
+  mjs: 'javascript',
+  cjs: 'javascript',
   rs: 'rust',
   py: 'python',
   pyi: 'python',
+  pyw: 'python',
   go: 'go',
   java: 'java',
   c: 'c',
@@ -15,32 +20,51 @@ const EXT_TO_LANG: Record<string, string> = {
   cc: 'cpp',
   cxx: 'cpp',
   hpp: 'cpp',
+  hh: 'cpp',
+  hxx: 'cpp',
   cs: 'csharp',
   rb: 'ruby',
   php: 'php',
   swift: 'swift',
   kt: 'kotlin',
+  kts: 'kotlin',
   scala: 'scala',
+  sc: 'scala',
   sh: 'shell',
   bash: 'shell',
   zsh: 'shell',
+  fish: 'shell',
+  ps1: 'powershell',
+  psm1: 'powershell',
+  bat: 'bat',
+  cmd: 'bat',
   yml: 'yaml',
   yaml: 'yaml',
   json: 'json',
+  jsonc: 'json',
+  json5: 'json',
   xml: 'xml',
+  svg: 'xml',
   html: 'html',
   htm: 'html',
+  vue: 'html',
+  svelte: 'html',
   css: 'css',
   scss: 'scss',
+  sass: 'scss',
   less: 'less',
   sql: 'sql',
   md: 'markdown',
   markdown: 'markdown',
+  mdx: 'markdown',
   toml: 'ini',
   ini: 'ini',
   cfg: 'ini',
-  env: 'plaintext',
+  conf: 'ini',
+  properties: 'ini',
+  env: 'ini',
   txt: 'plaintext',
+  text: 'plaintext',
   log: 'plaintext',
   diff: 'diff',
   patch: 'diff',
@@ -48,28 +72,78 @@ const EXT_TO_LANG: Record<string, string> = {
   gitignore: 'plaintext',
   dockerfile: 'dockerfile',
   makefile: 'makefile',
+  mk: 'makefile',
   cmake: 'cmake',
+  lua: 'lua',
+  dart: 'dart',
+  r: 'r',
+  pl: 'perl',
+  pm: 'perl',
+  proto: 'protobuf',
+  graphql: 'graphql',
+  gql: 'graphql',
+  tf: 'hcl',
+  tfvars: 'hcl',
+  hcl: 'hcl',
+  ml: 'fsharp',
+  fs: 'fsharp',
+  fsx: 'fsharp',
+  clj: 'clojure',
+  cljs: 'clojure',
+  ex: 'elixir',
+  exs: 'elixir',
+  erl: 'plaintext',
+  hs: 'plaintext',
+  jl: 'julia',
+  nim: 'plaintext',
+  zig: 'plaintext',
+  vb: 'vb',
+  pas: 'pascal',
+  asm: 'plaintext',
+  s: 'plaintext',
+  ipynb: 'json',
+  csv: 'plaintext',
+  tsv: 'plaintext',
+};
+
+/** Match by exact (lowercased) filename for extensionless or special files. */
+const NAME_TO_LANG: Record<string, string> = {
+  dockerfile: 'dockerfile',
+  'docker-compose.yml': 'yaml',
+  'docker-compose.yaml': 'yaml',
+  makefile: 'makefile',
+  'gnumakefile': 'makefile',
+  'cmakelists.txt': 'cmake',
+  '.gitignore': 'plaintext',
+  '.gitattributes': 'plaintext',
+  '.dockerignore': 'plaintext',
+  '.env': 'ini',
+  '.bashrc': 'shell',
+  '.zshrc': 'shell',
+  '.bash_profile': 'shell',
+  '.profile': 'shell',
+  'cargo.lock': 'ini',
+  'gemfile': 'ruby',
+  'rakefile': 'ruby',
+  'package.json': 'json',
+  'tsconfig.json': 'json',
 };
 
 export function detectLanguage(filePath: string): string {
   const parts = filePath.split('/');
   const filename = parts[parts.length - 1].toLowerCase();
 
-  // Special filenames
-  if (filename === 'dockerfile') return 'dockerfile';
-  if (filename === 'makefile') return 'makefile';
-  if (filename === 'cmakelists.txt') return 'cmake';
-  if (filename === '.gitignore') return 'plaintext';
-  if (filename === '.env') return 'plaintext';
-  if (filename.startsWith('.')) {
-    // Hidden config files — try extension after first dot
-    const ext = filename.split('.').pop();
-    if (ext && EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
-  }
+  // 1. Exact filename match (Dockerfile, Makefile, .bashrc, …).
+  if (NAME_TO_LANG[filename]) return NAME_TO_LANG[filename];
 
-  // Extension-based
-  const ext = filename.includes('.') ? filename.split('.').pop() : null;
+  // 2. Dockerfile.* variants (Dockerfile.dev etc.).
+  if (filename.startsWith('dockerfile')) return 'dockerfile';
+
+  // 3. Extension match. Use the LAST dot segment so `foo.config.js` → js and
+  //    hidden files like `.eslintrc.json` → json work the same way.
+  const ext = filename.includes('.') ? filename.split('.').pop()! : null;
   if (ext && EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
 
+  // 4. Unknown → plaintext. Monaco still gives line numbers, search, folding.
   return 'plaintext';
 }

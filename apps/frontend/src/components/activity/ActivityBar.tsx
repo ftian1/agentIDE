@@ -4,11 +4,14 @@
  * Folder, Bot, ShieldCheck, Sun, Wrench, GitBranch in the top group;
  * Settings (gear) pinned to the bottom.
  */
-import { Folder, Bot, ShieldCheck, Sun, Wrench, GitBranch, Settings } from 'lucide-react';
+import { Folder, Bot, ShieldCheck, Sun, Wrench, GitBranch, Boxes, Bug, Settings } from 'lucide-react';
 import { useLayoutStore } from '../../stores/layoutStore';
 import type { ActivityId } from '../../stores/layoutStore';
 import { useCodeChangeStore } from '../../stores/codeChangeStore';
 import { useApprovalQueue } from '../../hooks/useApprovalQueue';
+import { useConnectionStore } from '../../stores/connectionStore';
+import { useSessionStore } from '../../stores/sessionStore';
+import { useAgentEngineStore } from '../../stores/agentEngineStore';
 
 interface ActivityItem {
   id: ActivityId;
@@ -20,19 +23,27 @@ interface ActivityItem {
 export function ActivityBar() {
   const active = useLayoutStore((s) => s.activeActivity);
   const setActive = useLayoutStore((s) => s.setActiveActivity);
+  const setOpenModal = useLayoutStore((s) => s.setOpenModal);
   const { pendingCount } = useApprovalQueue();
   const pendingChanges = useCodeChangeStore((s) =>
     Object.values(s.changeSets).filter((cs) => cs.status === 'pending' || cs.status === 'complete')
       .reduce((sum, cs) => sum + Object.keys(cs.files).length, 0)
   );
+  // Highlight the Bot icon when the user hasn't created any connections or agent profiles yet.
+  const connCount = useConnectionStore((s) => Object.keys(s.connections).length);
+  const profileCount = useAgentEngineStore((s) => s.profiles.length);
+  const sessionCount = useSessionStore((s) => Object.keys(s.sessions).length);
+  const needsAgent = connCount === 0 && profileCount === 0 && sessionCount === 0;
 
   const topItems: ActivityItem[] = [
     { id: 'explorer', icon: Folder, label: 'File Explorer' },
     { id: 'agentManager', icon: Bot, label: 'Agent Manager' },
     { id: 'approvals', icon: ShieldCheck, label: 'Approvals', badge: pendingCount || undefined },
     { id: 'sessionManager', icon: Sun, label: 'Session Manager' },
+    { id: 'debug', icon: Bug, label: 'Debug (HTTP Trace)' },
     { id: 'tools', icon: Wrench, label: 'Tools' },
     { id: 'sourceControl', icon: GitBranch, label: 'Source Control', badge: pendingChanges || undefined },
+    { id: 'models', icon: Boxes, label: 'Models' },
   ];
   const bottomItems: ActivityItem[] = [
     { id: 'settings', icon: Settings, label: 'Settings' },
@@ -40,10 +51,12 @@ export function ActivityBar() {
 
   const renderItem = (item: ActivityItem) => {
     const isActive = active === item.id;
+    // Agent Manager now shows the sidebar panel (with "Add Agent" button at top).
+    const onClick = () => setActive(item.id);
     return (
       <button
         key={item.id}
-        onClick={() => setActive(item.id)}
+        onClick={onClick}
         className={`
           relative w-10 h-10 flex items-center justify-center rounded-md
           transition-colors duration-100
@@ -57,6 +70,10 @@ export function ActivityBar() {
         {/* Left accent border when active */}
         {isActive && (
           <span className="absolute left-0 top-1 bottom-1 w-0.5 bg-accent rounded-r" />
+        )}
+        {/* Highlight pulse for Agent Manager when no instances exist */}
+        {item.id === 'agentManager' && needsAgent && (
+          <span className="absolute inset-0 rounded-md bg-accent/20 animate-pulse" />
         )}
         <item.icon size={20} strokeWidth={1.5} />
         {/* Badge */}

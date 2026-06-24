@@ -157,15 +157,15 @@ pub async fn git_branches(
     let ssh_arc = session_ref.value().clone();
 
     // One round-trip: check repo, print current branch, then list locals.
+    // Use `git -C <dir>` so a subdirectory of a repo still resolves the repo.
     // Markers keep the sections unambiguous.
     let dir = shell_quote(&path);
     let cmd = format!(
-        "cd {dir} 2>/dev/null || exit 0; \
-         git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0; \
+        "git -C {dir} rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0; \
          echo __REPO__; \
-         echo \"CUR=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)\"; \
+         echo \"CUR=$(git -C {dir} rev-parse --abbrev-ref HEAD 2>/dev/null)\"; \
          echo __BRANCHES__; \
-         git for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null"
+         git -C {dir} for-each-ref --format='%(refname:short)' refs/heads 2>/dev/null"
     );
     let raw = crate::connection::ssh::exec_remote(ssh_arc.as_ref(), &cmd)
         .await
@@ -207,7 +207,7 @@ pub async fn git_checkout(
     let ssh_arc = session_ref.value().clone();
 
     let cmd = format!(
-        "cd {} && git checkout {} 2>&1",
+        "git -C {} checkout {} 2>&1",
         shell_quote(&path),
         shell_quote(&branch),
     );

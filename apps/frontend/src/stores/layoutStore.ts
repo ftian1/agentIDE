@@ -35,9 +35,9 @@ function persistLayout(state: Partial<LayoutStore>) {
   } catch { /* ignore */ }
 }
 
-export type ActivityId = 'agentManager' | 'explorer' | 'sessionManager' | 'search' | 'approvals' | 'tools' | 'sourceControl' | 'settings';
-export type BottomPanelTab = 'terminal' | 'agentStdout' | 'mcpLogs' | 'fileSync' | 'problems' | 'ports';
-export type ModalId = 'agentBackend';
+export type ActivityId = 'agentManager' | 'explorer' | 'sessionManager' | 'search' | 'approvals' | 'tools' | 'sourceControl' | 'models' | 'debug' | 'settings';
+export type BottomPanelTab = 'terminal' | 'agentStdout' | 'mcpLogs' | 'fileSync' | 'problems' | 'ports' | 'httpTraffic';
+export type ModalId = 'agentBackend' | 'llmProviders' | 'agentEngine';
 
 export interface EditorTab {
   id: string;
@@ -140,7 +140,7 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
   bottomPanelVisible: persisted.bottomPanelVisible ?? true,
   bottomPanelHeight: persisted.bottomPanelHeight ?? 220,
   bottomPanelTab: (() => {
-    const valid: BottomPanelTab[] = ['terminal', 'agentStdout', 'mcpLogs', 'fileSync', 'problems', 'ports'];
+    const valid: BottomPanelTab[] = ['terminal', 'agentStdout', 'mcpLogs', 'fileSync', 'problems', 'ports', 'httpTraffic'];
     const p = persisted.bottomPanelTab as BottomPanelTab | undefined;
     return p && valid.includes(p) ? p : 'terminal';
   })(),

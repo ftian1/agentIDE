@@ -42,7 +42,14 @@ export function TerminalInstance({ sessionId, api, onReady, active = true }: Pro
       cursorBlink: true,
       cursorStyle: 'bar',
       fontSize: 14,
-      fontFamily: "'Cascadia Code', 'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+      // Lead with Consolas: it ships on every Windows install. The previous
+      // first choices (Cascadia Code / JetBrains Mono / Fira Code) are usually
+      // NOT installed, so xterm measured glyph widths against a font that
+      // wasn't there while actually rendering with the monospace fallback —
+      // the measure/render mismatch is what made the letter spacing look wrong.
+      fontFamily: "Consolas, 'Cascadia Mono', 'Courier New', monospace",
+      letterSpacing: 0,
+      lineHeight: 1.0,
       theme: {
         background: '#0d1117',
         foreground: '#e6edf3',
@@ -76,11 +83,28 @@ export function TerminalInstance({ sessionId, api, onReady, active = true }: Pro
 
     term.open(container);
 
-    // Delay fit to let CSS layout settle, then fit
-    requestAnimationFrame(() => {
-      try { fitAddon.fit(); } catch {}
-      onReady?.(term.cols, term.rows);
-    });
+    // Fit AFTER the custom font is actually loaded. If we measure character
+    // cell width before the font is ready, xterm sizes cells against the
+    // fallback font; once the real font swaps in, glyph widths no longer match
+    // the cells → garbled letter spacing (the "first launch looks wrong, fine
+    // after reconnect" symptom — by reconnect the font is cached). clearing the
+    // texture atlas forces xterm to remeasure with the now-loaded font.
+    const fitWhenFontReady = () => {
+      const doFit = () => {
+        try {
+          term.clearTextureAtlas?.();
+          fitAddon.fit();
+        } catch {}
+        onReady?.(term.cols, term.rows);
+      };
+      const fonts = (document as Document & { fonts?: FontFaceSet }).fonts;
+      if (fonts?.ready) {
+        fonts.ready.then(() => requestAnimationFrame(doFit)).catch(() => requestAnimationFrame(doFit));
+      } else {
+        requestAnimationFrame(doFit);
+      }
+    };
+    fitWhenFontReady();
 
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
@@ -94,7 +118,9 @@ export function TerminalInstance({ sessionId, api, onReady, active = true }: Pro
 
     // Forward user keystrokes to the backend
     const keyDispose = term.onData((input) => {
-      api.write(sessionId, input);
+      api.write(sessionId, input).catch((e) => {
+        console.error(`[Terminal] write_input failed for ${sessionId}:`, e);
+      });
     });
 
     // Forward resize events
@@ -129,12 +155,24 @@ export function TerminalInstance({ sessionId, api, onReady, active = true }: Pro
   // PTY so the agent CLI re-renders at the correct column count.
   useEffect(() => {
     if (!active) return;
-    // Double rAF: wait for the unhide to take layout effect before measuring.
+    // The terminal may have first mounted inside a hidden (display:none) tab,
+    // where xterm measured the character cell as 0/wrong — that's the real
+    // cause of the garbled letter spacing on first load (fine after a reconnect
+    // because by then the raw tab was already visible). fit() alone only
+    // recomputes row/col counts; it does NOT remeasure the glyph cell. Nudging
+    // fontFamily forces xterm to recompute cell dimensions from scratch, then
+    // we clear the glyph cache and refit.
     const id = requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         try {
-          fitAddonRef.current?.fit();
           const term = terminalRef.current;
+          if (term) {
+            const ff = term.options.fontFamily;
+            term.options.fontFamily = `${ff} `; // change identity → force remeasure
+            term.options.fontFamily = ff;
+            term.clearTextureAtlas?.();
+          }
+          fitAddonRef.current?.fit();
           if (term) api.resize(sessionId, term.cols, term.rows);
         } catch {}
       }),

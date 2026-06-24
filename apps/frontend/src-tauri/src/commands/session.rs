@@ -147,6 +147,15 @@ pub struct ApprovalRequestEvent {
     pub cwd: Option<String>,
 }
 
+/// Tauri event payload for a captured HTTP exchange from the tap.
+#[derive(Debug, Clone, Serialize)]
+pub struct HttpTrafficEvent {
+    pub session_id: String,
+    pub connection_id: String,
+    pub exchange: shared_protocol::types::HttpExchange,
+    pub seq: u64,
+}
+
 #[tauri::command]
 pub async fn spawn_session(
     state: State<'_, AppState>,
@@ -170,11 +179,21 @@ pub async fn spawn_session(
         other => ToolKind::Custom(other.to_string()),
     };
 
+    let mut env = req.env.unwrap_or_default();
+    // Inject HTTP-tap control keys from saved settings; the remote host reads
+    // and strips them, starting a per-session capture proxy when enabled.
+    if let Some((enabled, mode)) = crate::commands::tap::tap_control(&state) {
+        if enabled {
+            env.insert("__tap_enabled".into(), "1".into());
+            env.insert("__tap_mode".into(), mode);
+        }
+    }
+
     let msg = ProtocolMessage::SpawnSession {
         session_id: session_id.clone(),
         tool,
         args: req.args.clone(),
-        env: req.env.unwrap_or_default(),
+        env,
         cwd: req.cwd.clone(),
         terminal_cols: req.terminal_cols,
         terminal_rows: req.terminal_rows,
@@ -324,6 +343,36 @@ pub async fn connection_demux_relay(
                 let _ = app_handle.emit("approval:request", ApprovalRequestEvent {
                     session_id: sid, request_id, title, scope, command, cwd,
                 });
+            }
+            Ok(Some(ProtocolMessage::HttpTraffic { session_id: sid, exchange, seq })) => {
+                let evt = HttpTrafficEvent {
+                    session_id: sid.clone(),
+                    connection_id: connection_id.clone(),
+                    exchange: exchange.clone(),
+                    seq,
+                };
+                // Persist to JSONL file (existing).
+                crate::commands::tap::append_trace(&connection_id, &evt);
+                // Persist to SQLite DB (new).
+                let state = app_handle.state::<crate::AppState>();
+                crate::commands::tap::save_exchange_to_db(&state, &crate::store::TapExchangeRecord {
+                    connection_id: connection_id.clone(),
+                    session_id: sid,
+                    exchange_id: exchange.exchange_id.clone(),
+                    seq: seq as i64,
+                    method: exchange.method.clone(),
+                    url: exchange.url.clone(),
+                    host: exchange.host.clone(),
+                    status: exchange.status as i64,
+                    req_headers: serde_json::to_value(&exchange.req_headers).unwrap_or_default(),
+                    req_body: exchange.req_body.clone(),
+                    resp_headers: serde_json::to_value(&exchange.resp_headers).unwrap_or_default(),
+                    resp_body: exchange.resp_body.clone(),
+                    duration_ms: exchange.duration_ms as i64,
+                    mode: serde_json::to_string(&exchange.mode).unwrap_or_default().trim_matches('"').to_string(),
+                    truncated: exchange.truncated,
+                });
+                let _ = app_handle.emit("http:traffic", evt);
             }
             Ok(Some(ProtocolMessage::CloseSessionAck { session_id: sid, .. })) => {
                 // A session closed — drop its scratch state. The relay lives on

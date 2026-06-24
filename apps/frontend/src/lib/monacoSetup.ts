@@ -10,7 +10,14 @@
  * enough; main.tsx imports it eagerly.
  */
 import { loader } from '@monaco-editor/react';
+// The package main entry (esm/vs/editor/editor.main) is both the typed monaco
+// namespace AND pulls in every language contribution (tokenizers/grammars) as a
+// side effect. Using editor.api alone gives the core engine with NO syntax
+// highlighting — that was the bug. Importing the main entry fixes highlighting.
 import * as monaco from 'monaco-editor';
+// Explicit side-effect import so the bundler never tree-shakes the language
+// contributions out (they register via side effects).
+import 'monaco-editor/esm/vs/editor/editor.main.js';
 
 // Wire Monaco's web workers to Vite's bundled worker URLs (Vite resolves the
 // ?worker imports at build time, so they ship inside the app — no CDN).
@@ -43,5 +50,10 @@ import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
   },
 };
 
-// Use the local monaco instance instead of the CDN AMD loader.
+// Use the local monaco instance instead of the CDN AMD loader, and eagerly
+// initialise it so the very first <Editor> mount uses THIS monaco (with all the
+// language contributions registered above) rather than racing a CDN fetch.
 loader.config({ monaco });
+loader.init().catch(() => {
+  /* init is also driven by the first Editor mount; ignore double-init */
+});

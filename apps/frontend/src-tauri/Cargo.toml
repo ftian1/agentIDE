@@ -32,6 +32,11 @@ dashmap.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+windows-sys = { version = "0.48", features = ["Win32_Networking_WinHttp", "Win32_Foundation"] }
 async-trait = "0.1"
 dirs = "6"
 bytes = "1"

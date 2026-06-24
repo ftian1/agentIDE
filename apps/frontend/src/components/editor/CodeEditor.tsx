@@ -78,7 +78,7 @@ export function CodeEditor({ connectionId, path }: Props) {
             lineNumbers: 'on',
             scrollBeyondLastLine: false,
             fontSize: 13,
-            fontFamily: "'Cascadia Code', 'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+            fontFamily: "Consolas, 'Cascadia Mono', 'Courier New', monospace",
             padding: { top: 8, bottom: 8 },
           }}
           loading={

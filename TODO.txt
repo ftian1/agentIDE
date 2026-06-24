@@ -1,6 +1,117 @@
 # Remote AI IDE — TODO
-# Last updated: 2026-06-19
+# Last updated: 2026-06-23
 # ✅ = done, ⬜ = not yet
+
+## Agent Engine Settings (Agent Manager integration)
+
+### ✅ Multi-tab Agent Engine Settings modal
+- Replaces the AgentManagerPanel sidebar: Bot icon now opens a 2-tab modal
+  (SSH Connection + agent dropdown → Agent Setting → Launch)
+- Claude: work dir + launch-arg presets (multi-select, ref `claude --help`) +
+  model env-var dropdowns (ANTHROPIC_MODEL etc.) sourced from configured LLM providers;
+  empty → notice + one-click jump to LLM Provider settings
+- Other agents (OpenCode/Codex/Hermes): generic work dir + free-text args + key/value env,
+  spawned as Custom tool
+- Launch = connect + spawn + persist config (localStorage); frontend-only, no Rust change
+- Files: stores/agentEngineStore.ts, components/settings/AgentEngineModal.tsx,
+  layoutStore.ts, ActivityBar.tsx, App.tsx, hooks/useMenuCommands.ts
+
+### ⬜ Full per-agent arg/env schema for OpenCode / Codex / Hermes
+- Currently generic (free-text args + key/value env). Research each CLI's flags and
+  build dropdown presets like Claude has.
+
+### ⬜ Move agent-engine config persistence to SQLite
+- Now localStorage (per-browser). Move to settings KV for cross-machine consistency,
+  alongside agent_settings / llm_providers.
+
+### ⬜ Richer claude --help arg catalog
+- CLAUDE_ARG_PRESETS is a curated subset. Add value-taking flags (--model, --resume <id>,
+  --add-dir, etc.) with proper input widgets instead of relying on the free-text field.
+
+## HTTP Traffic Tap (claude-tap-style)
+
+### ✅ Per-session HTTP tap for remote agent CLIs
+- remote-agent-host src/tap/: MITM (HTTPS_PROXY + rcgen CA, decrypt all HTTPS) AND
+  reverse (ANTHROPIC_BASE_URL/base-URL injection) modes; one proxy per session on 127.0.0.1
+- HttpExchange protocol msg → demux relay emits http:traffic + appends JSONL to
+  ~/.remote-ai-ide/traces/; "HTTP 流量" bottom-panel tab with request/response detail
+- TLS backend = ring (not aws-lc) to keep cargo xwin Windows cross-build working
+- Auth headers (authorization/x-api-key/cookie) redacted at the source before send
+- Tap on/off + mode persisted (tap_settings); body capped at 1 MiB (truncated flag)
+
+### ⬜ HTTP/2 upstream support
+- Proxy currently forces http/1.1 via ALPN. If a provider requires h2, add h2 upstream path.
+- Files: crates/remote-agent-host/src/tap/proxy.rs
+
+### ✅ Debug View + SQLite DB persistence (claude-tap style)
+- ✅ SQLite tap_exchanges table (indexed by connection_id, session_id, created_at)
+- ✅ Auto-save each captured exchange to DB in demux relay (alongside JSONL)
+- ✅ Tauri commands: load_tap_exchanges_db, clear_tap_exchanges_db
+- ✅ Frontend ActivityBar: Bug icon → DebugView as main content
+- ✅ DebugView layout: session tree (left) | exchange list (center) | detail panel (bottom)
+- ✅ Filter bar: search URL, method dropdown, status range
+- ✅ Real-time updates via http:traffic event + DB loading on mount
+- ⬜ Turn grouping: group exchanges by conversation turn (needs turn_id from agent_parse)
+- ⬜ Model column in exchange list (extract model from request body)
+- Files: store/mod.rs, commands/tap.rs, commands/session.rs, DebugView.tsx, ActivityBar.tsx,
+  tapApi.ts, layoutStore.ts, App.tsx
+
+### ⬜ WebSocket capture
+- claude-tap records WS sessions; not handled in this pass (only HTTP req/resp).
+
+### ⬜ Tie reverse-mode upstream to configured LLM provider base URL
+- reverse_upstream_for() hardcodes api.anthropic.com / api.githubcopilot.com.
+- Wire to the new llmProviderStore active provider's baseUrl instead.
+- Files: crates/remote-agent-host/src/tap/mod.rs, stores/llmProviderStore.ts
+
+### ⬜ CLIs that ignore HTTPS_PROXY
+- Known limitation: only proxy-honoring clients are captured under MITM. Surface a notice
+  in the panel when tap is on but no traffic appears for a session.
+
+### ✅ Tap upstream connection must honor corporate proxy (BLOCKER on proxied hosts)
+- ✅ FIXED 2026-06-23: proxy.rs forward() now detects upstream HTTPS_PROXY from env/host,
+  CONNECT-tunnels through it before TLS handshake. server.rs handle_spawn captures original
+  proxy BEFORE tap overwrites HTTPS_PROXY. parse_host_port() supports host:port in
+  upstream_host (default 443). Verified MITM + reverse on emr816613-vm03.jf.intel.com
+  through proxy-dmz.intel.com:912 → api.anthropic.com:443 — both modes capture full
+  HttpExchange with auth redaction (design.md §4.24).
+- Files: tap/proxy.rs (+ tunnel_via_proxy, parse_host_port), tap/mod.rs (+ UpstreamProxy,
+  parse_upstream_proxy, tests), server.rs (handle_spawn proxy capture), main.rs (test-tap
+  --test-tap-proxy)
+
+## LLM Provider Configuration
+
+### ✅ Multi-provider LLM settings + model list sidebar
+- Settings modal (LlmProviderModal): add/configure providers
+  - GitHub Copilot via GitHub OAuth device-code flow (mirrors copilot-gateway/auth.py)
+  - OpenAI-compatible (OpenAI/DeepSeek/…): base URL + API key, auto-fetch /models
+- Left-nav "Models" activity (ModelListPanel): provider → model tree, click to set active
+- Backend commands/llm.rs (reqwest 0.12 rustls-tls); persisted in SQLite settings KV
+  (llm_providers + active_model). Frontend api/llmApi.ts + stores/llmProviderStore.ts
+
+### ⬜ Route agent/chat traffic through the selected active_model
+- Currently active_model is only persisted + shown with ✓; nothing consumes it yet
+- Wire it into the agent backend (AgentBackendModal / agentSettingsStore) so the chosen
+  provider+model actually drives requests (likely via ANTHROPIC_BASE_URL / OpenAI base URL)
+- ✅ Gateway backend done + MERGED with tap: gateway module deleted, its routing/auth
+  logic moved into tap/proxy.rs forward(). Unified proxy always records HttpTraffic;
+  if __gateway_token is present it also injects Bearer auth + routes to provider upstream
+  (api.githubcopilot.com etc.). ANTHROPIC_AUTH_TOKEN=dummy set for reverse mode always
+  (Claude safe). No reqwest/tokio-stream deps needed — tap's hyper handles upstream.
+  Frontend just sets __gateway_provider/__gateway_token/__gateway_mode (design.md §4.26)
+- ⬜ OpenAI-compatible provider wiring (e.g. DeepSeek): need translate mode
+  (Anthropic→OpenAI) path through gateway, or just set ANTHROPIC_BASE_URL if native
+
+### ⬜ Copilot token refresh/expiry handling
+- copilot_device_poll stores the GitHub OAuth access_token; no refresh-on-expiry path yet
+- Detect 401 on /models or chat → re-trigger device-code flow
+
+### ⬜ Secure storage for provider keys/tokens
+- API keys + Copilot token are stored as plaintext JSON in local SQLite (same as existing
+  agent_settings). Consider OS keychain (keyring crate) for hardening.
+
+### ⬜ "Open in browser" button for the device-code verification URL
+- Needs @tauri-apps/plugin-shell opener (plugin already a dependency)
 
 ## Remote Platform Support
 

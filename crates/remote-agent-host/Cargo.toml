@@ -32,6 +32,17 @@ chrono.workspace = true
 bytes = "1"
 portable-pty = "0.9"
 
+# HTTP traffic tap: MITM/reverse proxy for agent CLI outbound requests.
+hyper = { version = "1", features = ["server", "client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem", "x509-parser"] }
+serde_bytes = "0.11"
+
+
 # Only needed by ssh-test binary
 russh = { version = "0.61", features = ["async-trait"], optional = true }
 ssh-key = { version = "0.6", features = ["ed25519"], optional = true }

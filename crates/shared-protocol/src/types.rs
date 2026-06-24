@@ -215,3 +215,44 @@ pub enum ApprovalDecision {
     /// Reject this request.
     Reject,
 }
+
+/// How the HTTP tap captured an exchange.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TapMode {
+    /// Forward proxy with TLS man-in-the-middle (HTTPS_PROXY + injected CA).
+    Mitm,
+    /// Reverse proxy via base-URL injection (no TLS interception).
+    Reverse,
+}
+
+/// A single captured HTTP request/response exchange from the agent CLI.
+///
+/// Bodies are captured up to a cap (see the tap proxy); `truncated` marks
+/// exchanges where either body exceeded it. Sensitive auth headers are
+/// redacted at the source before this leaves the remote host.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpExchange {
+    /// Unique id for this exchange (uuid).
+    pub exchange_id: String,
+    pub method: String,
+    /// Full request URL (scheme://host/path?query).
+    pub url: String,
+    /// Host portion, for quick grouping in the UI.
+    pub host: String,
+    pub req_headers: std::collections::HashMap<String, String>,
+    #[serde(with = "serde_bytes")]
+    pub req_body: Vec<u8>,
+    pub status: u16,
+    pub resp_headers: std::collections::HashMap<String, String>,
+    #[serde(with = "serde_bytes")]
+    pub resp_body: Vec<u8>,
+    /// Unix epoch millis when the request started.
+    pub started_at: u64,
+    pub duration_ms: u64,
+    pub mode: TapMode,
+    /// True if either body was truncated at the capture cap.
+    pub truncated: bool,
+}
+

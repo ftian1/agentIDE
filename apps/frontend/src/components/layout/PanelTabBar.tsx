@@ -11,6 +11,7 @@ const TABS: { id: BottomPanelTab; label: string }[] = [
   { id: 'fileSync', label: '文件同步 Sync' },
   { id: 'problems', label: '问题' },
   { id: 'ports', label: '端口' },
+  { id: 'httpTraffic', label: 'HTTP 流量' },
 ];
 
 export function PanelTabBar() {

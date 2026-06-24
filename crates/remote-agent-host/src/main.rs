@@ -6,12 +6,15 @@
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
+use tap::UpstreamProxy;
+
 mod server;
 mod session;
 mod pty;
 mod transport;
 mod installer;
 mod agent_parse;
+mod tap;
 
 fn parse_mode() -> String {
     let args: Vec<String> = std::env::args().collect();
@@ -24,6 +27,121 @@ fn parse_mode() -> String {
         i += 1;
     }
     mode
+}
+
+/// Extract --test-tap <mitm|reverse> from argv, if present.
+fn parse_test_tap_mode() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--test-tap" && i + 1 < args.len() {
+            return Some(args[i + 1].clone());
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Extract --test-tap-upstream <host> from argv (for reverse mode).
+fn parse_test_tap_upstream() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--test-tap-upstream" && i + 1 < args.len() {
+            return Some(args[i + 1].clone());
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Extract --test-tap-proxy <url> from argv (corporate forward-proxy).
+fn parse_test_tap_proxy() -> Option<UpstreamProxy> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--test-tap-proxy" && i + 1 < args.len() {
+            return tap::parse_upstream_proxy(&args[i + 1]);
+        }
+        i += 1;
+    }
+    // Also check env
+    std::env::var("HTTPS_PROXY")
+        .ok()
+        .or_else(|| std::env::var("https_proxy").ok())
+        .and_then(|v| tap::parse_upstream_proxy(&v))
+}
+
+/// Standalone tap test mode: starts a proxy, prints its port + CA path, then
+/// collects captured exchanges for `timeout_secs` seconds, printing each as
+/// JSON to stdout before exiting.
+async fn run_tap_test(tap_mode: &str, upstream: Option<String>, timeout_secs: u64) -> anyhow::Result<()> {
+    use shared_protocol::messages::ProtocolMessage;
+    use shared_protocol::types::TapMode;
+
+    let mode = match tap_mode {
+        "reverse" => TapMode::Reverse,
+        _ => TapMode::Mitm,
+    };
+    let upstream_host = upstream.or_else(|| {
+        if matches!(mode, TapMode::Reverse) {
+            Some("api.anthropic.com".to_string())
+        } else {
+            None
+        }
+    });
+
+    let upstream_proxy = parse_test_tap_proxy();
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ProtocolMessage>();
+
+    let handle = tap::proxy::start_session_proxy(
+        "test-session".to_string(),
+        tx.clone(),
+        mode.clone(),
+        upstream_host.clone(),
+        upstream_proxy.clone(),
+        None, // gateway_provider
+        None, // gateway_token
+        None, // gateway_mode
+    )?;
+
+    let proxy_label = upstream_proxy
+        .as_ref()
+        .map(|p| format!("{}:{}", p.host, p.port))
+        .unwrap_or_else(|| "none".to_string());
+    eprintln!(
+        "TAP_TEST_READY|port={}|mode={}|ca_pem={}|upstream={}|upstream_proxy={}",
+        handle.port,
+        tap_mode,
+        handle.ca_pem_path.display(),
+        upstream_host.as_deref().unwrap_or("n/a"),
+        proxy_label,
+    );
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let mut exchange_count = 0u64;
+
+    loop {
+        match tokio::time::timeout_at(deadline, rx.recv()).await {
+            Ok(Some(msg)) => {
+                if let ProtocolMessage::HttpTraffic { session_id: _, exchange, seq: _ } = msg {
+                    if let Ok(json) = serde_json::to_string(&exchange) {
+                        println!("{}", json);
+                    }
+                    exchange_count += 1;
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {
+                eprintln!("TAP_TEST_TIMEOUT|exchanges_captured={}", exchange_count);
+                break;
+            }
+        }
+    }
+
+    drop(handle); // stops proxy accept loop
+    Ok(())
 }
 
 #[tokio::main]
@@ -101,6 +219,17 @@ async fn main() -> anyhow::Result<()> {
                     .init();
             }
         }
+    }
+
+    // --test-tap: standalone proxy test (exits after the test, no stdio loop)
+    if let Some(tap_mode) = parse_test_tap_mode() {
+        let upstream = parse_test_tap_upstream();
+        let timeout = std::env::var("TAP_TEST_TIMEOUT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30);
+        run_tap_test(&tap_mode, upstream, timeout).await?;
+        return Ok(());
     }
 
     let _mode = parse_mode();

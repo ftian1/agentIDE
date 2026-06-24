@@ -2,7 +2,7 @@ import { useState, useMemo, lazy, Suspense } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { SecondarySidebar } from './components/layout/SecondarySidebar';
 import { ExplorerPanel } from './components/explorer/ExplorerPanel';
-import { AgentManagerPanel } from './components/agent/AgentManagerPanel';
+import { ModelListPanel } from './components/models/ModelListPanel';
 import { SessionManagerPanel } from './components/session/SessionManagerPanel';
 import { SearchPanel } from './components/search/SearchPanel';
 import { StatusPanel } from './components/status/StatusPanel';
@@ -13,6 +13,8 @@ import { CodeEditor } from './components/editor/CodeEditor';
 import { AgentStdout } from './components/bottom/AgentStdout';
 import { BottomTerminal } from './components/bottom/BottomTerminal';
 import { McpLogs, FileSyncPanel, PortsPanel } from './components/bottom/BottomPanels';
+import { HttpTrafficPanel } from './components/bottom/HttpTrafficPanel';
+import { DebugView } from './components/debug/DebugView';
 import { useLayoutStore } from './stores/layoutStore';
 import { useWorkspaceView, useConnectionBootstrap } from './hooks/useWorkspaceView';
 
@@ -23,6 +25,7 @@ const CodeChangeEditor = lazy(() =>
   import('./components/changes/CodeChangeEditor').then(m => ({ default: m.CodeChangeEditor })));
 // TerminalPane is NOT lazy — needed immediately when session spawns (race with relay events)
 import { AgentColumnPanel } from './components/agentpanel/AgentColumnPanel';
+import { AgentManagerPanel } from './components/agent/AgentManagerPanel';
 import { TerminalDebugOverlay } from './components/debug/TerminalDebugOverlay';
 const SessionDetail = lazy(() =>
   import('./components/detail/SessionDetail').then(m => ({ default: m.SessionDetail })));
@@ -30,6 +33,10 @@ const ConnectionDialog = lazy(() =>
   import('./components/connection/ConnectionDialog').then(m => ({ default: m.ConnectionDialog })));
 const AgentBackendModal = lazy(() =>
   import('./components/settings/AgentBackendModal').then(m => ({ default: m.AgentBackendModal })));
+const LlmProviderModal = lazy(() =>
+  import('./components/settings/LlmProviderModal').then(m => ({ default: m.LlmProviderModal })));
+const AgentEngineModal = lazy(() =>
+  import('./components/settings/AgentEngineModal').then(m => ({ default: m.AgentEngineModal })));
 
 /** Minimal loading placeholder — avoids layout shift. */
 function Spinner({ label }: { label?: string }) {
@@ -91,10 +98,10 @@ export function App() {
 
   const sidebarContent = useMemo(() => {
     switch (activeActivity) {
-      case 'agentManager':
-        return <AgentManagerPanel />;
       case 'explorer':
         return <ExplorerPanel />;
+      case 'agentManager':
+        return <AgentManagerPanel />;
       case 'sessionManager':
         return <SessionManagerPanel />;
       case 'search':
@@ -103,6 +110,8 @@ export function App() {
         return <ApprovalQueue />;
       case 'tools':
         return <ToolsPanel />;
+      case 'models':
+        return <ModelListPanel />;
       case 'sourceControl':
         return (
           <Suspense fallback={<Spinner label="Loading changes..." />}>
@@ -129,6 +138,8 @@ export function App() {
           return <FileSyncPanel />;
         case 'ports':
           return <PortsPanel />;
+        case 'httpTraffic':
+          return <HttpTrafficPanel />;
         case 'problems':
           return (
             <div className="flex items-center justify-center h-full">
@@ -150,7 +161,15 @@ export function App() {
     );
   }, [bottomPanelTab]);
 
+  // Debug view takes over the entire area right of the ActivityBar.
+  // Hide sidebar / agent panel / bottom panel so it gets the full viewport.
+  const isDebugView = activeActivity === 'debug';
+  const showChrome = !zenMode && !isDebugView;
+
   const mainContent = useMemo(() => {
+    if (isDebugView) {
+      return <DebugView />;
+    }
     switch (workspaceView.kind) {
       case 'diff':
         return (
@@ -177,9 +196,7 @@ export function App() {
           </div>
         );
     }
-  }, [workspaceView]);
-
-  const showChrome = !zenMode;
+  }, [workspaceView, isDebugView]);
 
   return (
     <>
@@ -230,6 +247,18 @@ export function App() {
       {openModal === 'agentBackend' && (
         <Suspense fallback={null}>
           <AgentBackendModal onClose={() => setOpenModal(null)} />
+        </Suspense>
+      )}
+
+      {openModal === 'llmProviders' && (
+        <Suspense fallback={null}>
+          <LlmProviderModal onClose={() => setOpenModal(null)} />
+        </Suspense>
+      )}
+
+      {openModal === 'agentEngine' && (
+        <Suspense fallback={null}>
+          <AgentEngineModal onClose={() => setOpenModal(null)} />
         </Suspense>
       )}
 

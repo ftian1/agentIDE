@@ -8,6 +8,7 @@ import { initApprovalListeners } from './stores/approvalStore';
 import { initAgentListeners } from './stores/agentStore';
 import { initAgentLogListeners } from './stores/agentLogStore';
 import { initPerfListeners } from './stores/perfStore';
+import { initHttpTrafficListeners } from './stores/httpTrafficStore';
 
 // The window is created visible with a dark native backgroundColor (#0d1117),
 // which alone prevents the white WebView2 cold-start flash. We deliberately do
@@ -29,6 +30,7 @@ safeInit('approval', initApprovalListeners);
 safeInit('agent', initAgentListeners);
 safeInit('agentLog', initAgentLogListeners);
 safeInit('perf', initPerfListeners);
+safeInit('httpTraffic', initHttpTrafficListeners);
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   React.createElement(

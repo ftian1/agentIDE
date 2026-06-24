@@ -48,6 +48,8 @@ pub enum ProtocolMessage {
     ApplyChange { session_id: String, file_path: String, content: String },
     // ── Agent Stream Events ──────────────────────────────────
     AgentEvent { session_id: String, kind: AgentEventKind, text: String, code: Option<String>, label: Option<String>, status: Option<String>, seq: u64 },
+    // ── HTTP Traffic Tap ─────────────────────────────────────
+    HttpTraffic { session_id: String, exchange: HttpExchange, seq: u64 },
     // ── Approval Flow ────────────────────────────────────────
     ApprovalRequest { session_id: String, request_id: String, title: String, scope: String, command: String, cwd: Option<String> },
     ApprovalResponse { session_id: String, request_id: String, decision: ApprovalDecision },
@@ -87,6 +89,7 @@ impl ProtocolMessage {
             Self::CodeChangeBatch { .. } => "code_change_batch",
             Self::ApplyChange { .. } => "apply_change",
             Self::AgentEvent { .. } => "agent_event",
+            Self::HttpTraffic { .. } => "http_traffic",
             Self::ApprovalRequest { .. } => "approval_request",
             Self::ApprovalResponse { .. } => "approval_response",
             Self::Ping { .. } => "ping",
@@ -114,6 +117,7 @@ impl ProtocolMessage {
             | Self::CodeChangeBatch { session_id, .. }
             | Self::ApplyChange { session_id, .. }
             | Self::AgentEvent { session_id, .. }
+            | Self::HttpTraffic { session_id, .. }
             | Self::ApprovalRequest { session_id, .. }
             | Self::ApprovalResponse { session_id, .. } => Some(session_id),
             _ => None,
@@ -161,6 +165,7 @@ payload_struct!(CodeChangePayload { session_id: String, change_set_id: String, c
 payload_struct!(CodeChangeBatchPayload { session_id: String, change_set_id: String, description: String, status: String, file_count: u32 });
 payload_struct!(ApplyChangePayload { session_id: String, file_path: String, content: String });
 payload_struct!(AgentEventPayload { session_id: String, kind: AgentEventKind, text: String, code: Option<String>, label: Option<String>, status: Option<String>, seq: u64 });
+payload_struct!(HttpTrafficPayload { session_id: String, exchange: HttpExchange, seq: u64 });
 payload_struct!(ApprovalRequestPayload { session_id: String, request_id: String, title: String, scope: String, command: String, cwd: Option<String> });
 payload_struct!(ApprovalResponsePayload { session_id: String, request_id: String, decision: ApprovalDecision });
 payload_struct!(PingPayload { nonce: u64 });
@@ -240,6 +245,8 @@ impl ProtocolMessage {
                 rmp_serde::to_vec(&ApplyChangePayload { session_id: session_id.clone(), file_path: file_path.clone(), content: content.clone() }),
             Self::AgentEvent { session_id, kind, text, code, label, status, seq } =>
                 rmp_serde::to_vec(&AgentEventPayload { session_id: session_id.clone(), kind: kind.clone(), text: text.clone(), code: code.clone(), label: label.clone(), status: status.clone(), seq: *seq }),
+            Self::HttpTraffic { session_id, exchange, seq } =>
+                rmp_serde::to_vec(&HttpTrafficPayload { session_id: session_id.clone(), exchange: exchange.clone(), seq: *seq }),
             Self::ApprovalRequest { session_id, request_id, title, scope, command, cwd } =>
                 rmp_serde::to_vec(&ApprovalRequestPayload { session_id: session_id.clone(), request_id: request_id.clone(), title: title.clone(), scope: scope.clone(), command: command.clone(), cwd: cwd.clone() }),
             Self::ApprovalResponse { session_id, request_id, decision } =>
@@ -278,6 +285,7 @@ impl ProtocolMessage {
             "code_change_batch" => { let p: CodeChangeBatchPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::CodeChangeBatch { session_id: p.session_id, change_set_id: p.change_set_id, description: p.description, status: p.status, file_count: p.file_count } }
             "apply_change" => { let p: ApplyChangePayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::ApplyChange { session_id: p.session_id, file_path: p.file_path, content: p.content } }
             "agent_event" => { let p: AgentEventPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::AgentEvent { session_id: p.session_id, kind: p.kind, text: p.text, code: p.code, label: p.label, status: p.status, seq: p.seq } }
+            "http_traffic" => { let p: HttpTrafficPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::HttpTraffic { session_id: p.session_id, exchange: p.exchange, seq: p.seq } }
             "approval_request" => { let p: ApprovalRequestPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::ApprovalRequest { session_id: p.session_id, request_id: p.request_id, title: p.title, scope: p.scope, command: p.command, cwd: p.cwd } }
             "approval_response" => { let p: ApprovalResponsePayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::ApprovalResponse { session_id: p.session_id, request_id: p.request_id, decision: p.decision } }
             "ping" => { let p: PingPayload = rmp_serde::from_slice(bytes).map_err(|e| e.to_string())?; Self::Ping { nonce: p.nonce } }

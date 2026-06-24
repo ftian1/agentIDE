@@ -197,6 +197,17 @@ pub fn run() {
             commands::tool::install_tool,
             commands::settings::load_agent_settings,
             commands::settings::save_agent_settings,
+            commands::llm::copilot_device_start,
+            commands::llm::copilot_device_poll,
+            commands::llm::llm_fetch_models,
+            commands::llm::load_llm_providers,
+            commands::llm::save_llm_providers,
+            commands::llm::load_active_model,
+            commands::llm::save_active_model,
+            commands::tap::load_tap_settings,
+            commands::tap::save_tap_settings,
+            commands::tap::read_tap_traces,
+            commands::tap::clear_tap_traces,
             commands::approval::respond_approval,
         ])
         .run(tauri::generate_context!())

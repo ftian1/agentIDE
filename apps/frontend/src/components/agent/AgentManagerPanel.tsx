@@ -42,6 +42,7 @@ export function AgentManagerPanel() {
   const [connectResult, setConnectResult] = useState<{ success: boolean; message: string } | null>(null);
   const [prefill, setPrefill] = useState<{ host: string; port: number; user: string; highlightPwd: boolean } | null>(null);
   const credentialsRef = useRef<CredentialCache>(new Map());
+  const setOpenModal = useLayoutStore((s) => s.setOpenModal);
 
   const handleConnectSuccess = useCallback((message: string) => {
     setConnectResult({ success: true, message });
@@ -99,6 +100,7 @@ export function AgentManagerPanel() {
 
       {view === 'overview' ? (
         <OverviewView
+          onAddAgent={() => setOpenModal('agentEngine')}
           onConnect={() => { setPrefill(null); setView('connect'); }}
           onReconnectFallback={handleReconnectFallback}
           credentialsRef={credentialsRef}
@@ -117,10 +119,12 @@ export function AgentManagerPanel() {
 
 /** Level 1 — agent overview: Connect button + per-machine agent/session list. */
 function OverviewView({
+  onAddAgent,
   onConnect,
   onReconnectFallback,
   credentialsRef,
 }: {
+  onAddAgent: () => void;
   onConnect: () => void;
   onReconnectFallback: (host: string, port: number, user: string) => void;
   credentialsRef: React.MutableRefObject<CredentialCache>;
@@ -166,15 +170,23 @@ function OverviewView({
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="px-3 py-3">
+      <div className="px-3 py-3 space-y-2">
         <button
-          onClick={onConnect}
+          onClick={onAddAgent}
           className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded
                      bg-accent text-white text-xs font-medium
                      hover:bg-blue-500 transition-colors"
         >
           <Plus size={14} />
-          Connect New Agent
+          Add Agent
+        </button>
+        <button
+          onClick={onConnect}
+          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded
+                     border border-border bg-bg-tertiary text-text-secondary text-xs
+                     hover:text-text-primary transition-colors"
+        >
+          SSH Connect (manual)
         </button>
       </div>
 

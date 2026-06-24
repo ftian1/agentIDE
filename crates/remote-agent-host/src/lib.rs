@@ -12,3 +12,4 @@ pub mod pty;
 pub mod installer;
 pub mod transport;
 pub mod agent_parse;
+pub mod tap;

@@ -63,6 +63,29 @@ impl Database {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS tap_exchanges (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                connection_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                exchange_id TEXT NOT NULL UNIQUE,
+                seq INTEGER NOT NULL DEFAULT 0,
+                method TEXT NOT NULL,
+                url TEXT NOT NULL,
+                host TEXT NOT NULL,
+                status INTEGER NOT NULL DEFAULT 0,
+                req_headers TEXT NOT NULL DEFAULT '{}',
+                req_body BLOB,
+                resp_headers TEXT NOT NULL DEFAULT '{}',
+                resp_body BLOB,
+                duration_ms INTEGER NOT NULL DEFAULT 0,
+                mode TEXT NOT NULL DEFAULT 'reverse',
+                truncated INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_tap_conn ON tap_exchanges(connection_id);
+            CREATE INDEX IF NOT EXISTS idx_tap_session ON tap_exchanges(session_id);
+            CREATE INDEX IF NOT EXISTS idx_tap_created ON tap_exchanges(created_at);
             ",
         )
         .map_err(|e| format!("Migration error: {}", e))?;
@@ -150,6 +173,83 @@ impl Database {
         .map_err(|e| format!("Save error: {}", e))?;
         Ok(())
     }
+
+    // ── Tap exchange persistence ──────────────────────────────────
+
+    /// Insert a captured HTTP exchange into the DB (skip if duplicate).
+    pub fn insert_tap_exchange(&self, rec: &TapExchangeRecord) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let req_headers = serde_json::to_string(&rec.req_headers).unwrap_or_default();
+        let resp_headers = serde_json::to_string(&rec.resp_headers).unwrap_or_default();
+        conn.execute(
+            "INSERT OR IGNORE INTO tap_exchanges
+             (connection_id, session_id, exchange_id, seq, method, url, host, status,
+              req_headers, req_body, resp_headers, resp_body, duration_ms, mode, truncated)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+            params![
+                rec.connection_id, rec.session_id, rec.exchange_id, rec.seq,
+                rec.method, rec.url, rec.host, rec.status,
+                req_headers, rec.req_body, resp_headers, rec.resp_body,
+                rec.duration_ms, rec.mode, rec.truncated,
+            ],
+        ).map_err(|e| format!("Insert tap exchange: {e}"))?;
+        Ok(())
+    }
+
+    /// Load exchanges for a connection, newest first, limited.
+    pub fn load_tap_exchanges(
+        &self,
+        connection_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<TapExchangeRecord>, String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT connection_id, session_id, exchange_id, seq, method, url, host,
+                        status, req_headers, req_body, resp_headers, resp_body,
+                        duration_ms, mode, truncated
+                 FROM tap_exchanges WHERE connection_id = ?1
+                 ORDER BY id DESC LIMIT ?2 OFFSET ?3",
+            )
+            .map_err(|e| format!("Query error: {e}"))?;
+        let records = stmt
+            .query_map(params![connection_id, limit, offset], |row| {
+                let req_headers_str: String = row.get(8)?;
+                let resp_headers_str: String = row.get(10)?;
+                Ok(TapExchangeRecord {
+                    connection_id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    exchange_id: row.get(2)?,
+                    seq: row.get(3)?,
+                    method: row.get(4)?,
+                    url: row.get(5)?,
+                    host: row.get(6)?,
+                    status: row.get(7)?,
+                    req_headers: serde_json::from_str(&req_headers_str).unwrap_or_default(),
+                    req_body: row.get(9)?,
+                    resp_headers: serde_json::from_str(&resp_headers_str).unwrap_or_default(),
+                    resp_body: row.get(11)?,
+                    duration_ms: row.get(12)?,
+                    mode: row.get(13)?,
+                    truncated: row.get(14)?,
+                })
+            })
+            .map_err(|e| format!("Query error: {e}"))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(records)
+    }
+
+    /// Delete all exchanges for a connection.
+    pub fn clear_tap_exchanges(&self, connection_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| format!("Lock error: {}", e))?;
+        conn.execute(
+            "DELETE FROM tap_exchanges WHERE connection_id = ?1",
+            params![connection_id],
+        ).map_err(|e| format!("Clear error: {e}"))?;
+        Ok(())
+    }
 }
 
 /// A saved connection record from the database.
@@ -162,6 +262,26 @@ pub struct ConnectionRecord {
     pub user: String,
     pub auth_method: String,
     pub identity_file: Option<String>,
+}
+
+/// A captured HTTP exchange stored in the DB.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TapExchangeRecord {
+    pub connection_id: String,
+    pub session_id: String,
+    pub exchange_id: String,
+    pub seq: i64,
+    pub method: String,
+    pub url: String,
+    pub host: String,
+    pub status: i64,
+    pub req_headers: serde_json::Value,
+    pub req_body: Vec<u8>,
+    pub resp_headers: serde_json::Value,
+    pub resp_body: Vec<u8>,
+    pub duration_ms: i64,
+    pub mode: String,
+    pub truncated: bool,
 }
 
 /// Get the database file path.

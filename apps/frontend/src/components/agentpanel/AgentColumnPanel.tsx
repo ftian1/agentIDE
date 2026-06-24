@@ -40,12 +40,16 @@ export function AgentColumnPanel() {
         <ActiveFilesMenu sessionId={activeSessionId} />
       </div>
 
-      {/* Body — both tabs mounted, inactive one hidden to preserve state. */}
+      {/* Body — both tabs mounted, inactive one hidden to preserve state.
+          The raw terminal is hidden with opacity/z-index (NOT display:none) so
+          its container keeps real dimensions even while the structured tab is
+          showing — otherwise xterm first-measures the glyph cell at size 0 and
+          the letter spacing comes out garbled until a remeasure. */}
       <div className="flex-1 relative overflow-hidden">
-        <div className={`absolute inset-0 ${tab === 'structured' ? '' : 'hidden'}`}>
+        <div className={`absolute inset-0 ${tab === 'structured' ? 'z-10' : 'z-0 opacity-0 pointer-events-none'}`}>
           <AgentPanel sessionId={activeSessionId} />
         </div>
-        <div className={`absolute inset-0 bg-bg-primary ${tab === 'raw' ? '' : 'hidden'}`}>
+        <div className={`absolute inset-0 bg-bg-primary ${tab === 'raw' ? 'z-10' : 'z-0 opacity-0 pointer-events-none'}`}>
           {activeSessionId ? (
             <TerminalInstance key={activeSessionId} sessionId={activeSessionId} api={api} active={tab === 'raw'} />
           ) : (

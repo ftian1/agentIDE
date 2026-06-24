@@ -38,8 +38,8 @@ export function useMenuCommands(): MenuCommands {
   const ls = () => useLayoutStore.getState() as any;
 
   return {
-    openRemoteProject: () => setActiveActivity('agentManager'),
-    openConnectionManager: () => setActiveActivity('agentManager'),
+    openRemoteProject: () => ls().setOpenModal?.('agentEngine'),
+    openConnectionManager: () => ls().setOpenModal?.('agentEngine'),
     syncRemoteFs: () => {
       // TODO: wire up remote filesystem sync command
     },

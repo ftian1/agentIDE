@@ -245,6 +245,8 @@ pub struct Server {
     pub sessions: SessionManager,
     pub registry: Arc<SessionRegistry>,
     pub host_id: String,
+    /// Active HTTP tap/gateway proxies, keyed by session id. Dropping a handle stops it.
+    tap_proxies: HashMap<String, crate::tap::proxy::ProxyHandle>,
 }
 
 impl Server {
@@ -255,6 +257,7 @@ impl Server {
             sessions,
             registry,
             host_id: Uuid::new_v4().to_string(),
+            tap_proxies: HashMap::new(),
         }
     }
 
@@ -318,6 +321,67 @@ impl Server {
         transport_tx: &mpsc::UnboundedSender<ProtocolMessage>,
     ) -> Option<ProtocolMessage> {
         tracing::info!(%session_id, ?tool, ?container, "Handling SpawnSession");
+
+        let mut env = env;
+
+        // ── Unified proxy (tap + gateway) ───────────────────────────
+        // One local HTTP proxy handles both traffic recording (tap) and
+        // third-party provider routing (gateway). It always records
+        // HttpTraffic; if a provider token is present it also injects auth
+        // headers and routes to the provider's upstream.
+        //
+        // Capture the ORIGINAL upstream proxy BEFORE the tap overwrites
+        // HTTPS_PROXY — needed for forward() to CONNECT-tunnel outbound.
+        let original_upstream_proxy = {
+            let from_env_map = env.get("HTTPS_PROXY")
+                .or_else(|| env.get("https_proxy"))
+                .cloned();
+            let from_host = std::env::var("HTTPS_PROXY").ok()
+                .or_else(|| std::env::var("https_proxy").ok());
+            from_env_map.or(from_host)
+                .and_then(|v| crate::tap::parse_upstream_proxy(&v))
+        };
+        let tap_cfg = crate::tap::TapConfig::take_from_env(&mut env);
+        // The proxy is started when either tap recording is on OR a
+        // third-party provider needs routing (gateway has a token).
+        let need_proxy = tap_cfg.enabled
+            || tap_cfg.gateway_token.is_some();
+        if need_proxy {
+            // Upstream: gateway provider takes priority; fall back to tool default.
+            let upstream = if tap_cfg.gateway_provider.is_some() {
+                tap_cfg.gateway_provider.as_deref().map(|p| match p {
+                    "copilot" => "api.githubcopilot.com".to_string(),
+                    other => format!("api.{other}.com"),
+                })
+            } else if matches!(tap_cfg.mode, shared_protocol::types::TapMode::Reverse) {
+                Some(crate::tap::reverse_upstream_for(&tool).to_string())
+            } else {
+                None
+            };
+            match crate::tap::proxy::start_session_proxy(
+                session_id.clone(),
+                transport_tx.clone(),
+                tap_cfg.mode.clone(),
+                upstream,
+                original_upstream_proxy,
+                tap_cfg.gateway_provider.clone(),
+                tap_cfg.gateway_token.clone(),
+                tap_cfg.gateway_mode.clone(),
+            ) {
+                Ok(handle) => {
+                    let port = handle.port;
+                    for (k, v) in crate::tap::proxy_env(&tap_cfg.mode, port, &handle.ca_pem_path) {
+                        env.insert(k, v);
+                    }
+                    self.tap_proxies.insert(session_id.clone(), handle);
+                    let gw_label = tap_cfg.gateway_provider.as_deref().unwrap_or("none");
+                    tracing::info!(%session_id, port, gateway = %gw_label, "proxy: enabled (tap + gateway unified)");
+                }
+                Err(e) => {
+                    tracing::error!(%session_id, error = %e, "tap: failed to start, continuing without");
+                }
+            }
+        }
 
         // Auto-detect & install the tool if missing on the remote machine
         let original_cmd = match ensure_tool_installed(&tool) {
@@ -403,6 +467,8 @@ impl Server {
     }
 
     async fn handle_close(&mut self, session_id: &str) -> Option<ProtocolMessage> {
+        // Stop the unified proxy for this session, if any.
+        self.tap_proxies.remove(session_id);
         if let Some(session) = self.sessions.get(session_id) {
             let _ = session.pty_op_tx.send(PtyOp::Shutdown);
         }

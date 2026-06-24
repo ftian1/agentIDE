@@ -144,8 +144,11 @@ export function FileBrowser() {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [initialLoaded, setInitialLoaded] = useState(false);
 
-  // The directory the tree is currently rooted at — used for git queries.
-  const currentDir = tree[0]?.path ?? null;
+  // The directory git status is shown for. Follows the last folder the user
+  // expanded, so navigating into a repo shows that repo's branch. Defaults to
+  // the tree root.
+  const [activeDir, setActiveDir] = useState<string | null>(null);
+  const gitDir = activeDir ?? tree[0]?.path ?? null;
 
   // Load initial directory on connect
   useEffect(() => {
@@ -219,14 +222,17 @@ export function FileBrowser() {
       // Already loaded → just flip expand state. Children stay cached, so
       // re-expanding is instant (no refetch — that was the "refresh lag").
       if (node.loaded) {
+        const willExpand = !node.expanded;
+        if (willExpand) setActiveDir(node.path); // show this dir's git branch
         setTree((prev) => updateNode(prev, node.path, (n) => ({
           ...n,
-          expanded: !n.expanded,
+          expanded: willExpand,
         })));
         return;
       }
 
       // First expand of this dir → fetch children, then expand.
+      setActiveDir(node.path); // show this dir's git branch
       setTree((prev) => updateNode(prev, node.path, (n) => ({ ...n, loading: true })));
 
       try {
@@ -285,10 +291,10 @@ export function FileBrowser() {
           Explorer
         </span>
         <div className="flex-1 min-w-0 flex justify-end">
-          {activeConn && connected && currentDir && (
+          {activeConn && connected && gitDir && (
             <GitBranchDropdown
               connectionId={activeConn.id}
-              dir={currentDir}
+              dir={gitDir}
               onChanged={() => setInitialLoaded(false)}
             />
           )}
