@@ -14,6 +14,8 @@ interface AppShellProps {
   statusBar?: ReactNode;
   rightPanel?: ReactNode;
   agentPanel?: ReactNode;
+  /** Full-screen overlay rendered inside the main row (right of ActivityBar). */
+  overlay?: ReactNode;
 }
 
 /**
@@ -31,6 +33,7 @@ export function AppShell({
   statusBar,
   rightPanel,
   agentPanel,
+  overlay,
 }: AppShellProps) {
   return (
     <div className="flex flex-col h-screen bg-bg-primary">
@@ -38,7 +41,7 @@ export function AppShell({
       {topBar}
 
       {/* Main row */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         {/* Activity Bar (leftmost) */}
         <ActivityBar />
 
@@ -63,6 +66,9 @@ export function AppShell({
 
         {/* Right panel (session detail) */}
         {rightPanel}
+
+        {/* Overlay (e.g. DebugView) — covers everything right of ActivityBar */}
+        {overlay}
       </div>
 
       {/* Status Bar */}

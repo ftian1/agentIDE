@@ -235,22 +235,16 @@ export function App() {
             </AppShell.RightPanel>
           ) : undefined
         }
+        overlay={
+          isDebugView ? (
+            <div className="absolute inset-0 z-50 bg-bg-primary overflow-hidden">
+              <DebugView />
+            </div>
+          ) : undefined
+        }
       >
         {mainContent}
       </AppShell>
-
-      {/* Debug overlay — covers entire viewport above AppShell without unmounting panels */}
-      {isDebugView && (
-        <div className="fixed inset-0 z-50 bg-bg-primary">
-          <div className="h-full w-full flex">
-            {/* Leave room for ActivityBar */}
-            <div className="w-12 flex-shrink-0 bg-bg-secondary border-r border-border" />
-            <div className="flex-1 overflow-hidden">
-              <DebugView />
-            </div>
-          </div>
-        </div>
-      )}
 
       {showConnectionDialog && (
         <Suspense fallback={null}>
