@@ -231,6 +231,7 @@ pub async fn spawn_session(
 
     tracing::info!(%session_id, pid, "Session spawned (ack via demux relay)");
     // Record session → connection mapping for write/resize/close.
+    tracing::info!(%session_id, %connection_id, "spawn_session: recording session→connection mapping");
     state.session_connections.insert(session_id.clone(), connection_id.clone());
 
     Ok(SessionInfo {
@@ -294,6 +295,9 @@ pub async fn connection_demux_relay(
                 }
             }
             Ok(Some(ProtocolMessage::TerminalData { session_id: sid, data, seq })) => {
+                tracing::trace!(%connection_id, session = %sid, seq, len = data.len(),
+                    preview = %String::from_utf8_lossy(&data[..data.len().min(80)]),
+                    "Demux: terminal:data");
                 match app_handle.emit("terminal:data", TerminalDataEvent {
                     session_id: sid.clone(),
                     data: data.clone(),
@@ -313,7 +317,12 @@ pub async fn connection_demux_relay(
                 }
             }
             Ok(Some(ProtocolMessage::SessionEvent { session_id: sid, event_type, data, .. })) => {
-                tracing::info!(%connection_id, session = %sid, ?event_type, "Demux emitting session:event");
+                let cmd_preview = data.get("command").cloned().unwrap_or_default();
+                if !cmd_preview.is_empty() {
+                    tracing::info!(%connection_id, session = %sid, ?event_type, cmd = %cmd_preview, "Demux: session:event (launch)");
+                } else {
+                    tracing::info!(%connection_id, session = %sid, ?event_type, "Demux: session:event");
+                }
 
                 let _ = app_handle.emit("session:event", SessionEventPayload {
                     session_id: sid.clone(),
@@ -540,8 +549,15 @@ fn resolve_session_transport(
 ) -> Option<Arc<dyn crate::transport::Transport>> {
     // Look up session → connection_id
     let conn_id = state.session_connections.get(session_id)?.clone();
+    tracing::info!(%session_id, %conn_id, "resolve_session_transport: found conn_id");
     // Look up connection_id → transport
-    state.connection_transports.get(&conn_id).map(|r| r.value().clone())
+    let t = state.connection_transports.get(&conn_id).map(|r| r.value().clone());
+    if t.is_some() {
+        tracing::info!(%session_id, %conn_id, "resolve_session_transport: transport found");
+    } else {
+        tracing::warn!(%session_id, %conn_id, "resolve_session_transport: no transport for conn!");
+    }
+    t
 }
 
 #[tauri::command]
@@ -594,10 +610,15 @@ pub async fn write_input(
     session_id: String,
     data: Vec<u8>,
 ) -> Result<(), String> {
-    let transport = resolve_session_transport(&state, &session_id)
-        .ok_or_else(|| format!("No transport for session {}", session_id))?;
+    tracing::info!(%session_id, len = data.len(),
+        preview = %String::from_utf8_lossy(&data[..data.len().min(30)]),
+        "write_input: looking up transport");
 
-    tracing::info!(%session_id, len = data.len(), "write_input: sending to agent");
+    let transport = resolve_session_transport(&state, &session_id)
+        .ok_or_else(|| {
+            tracing::error!(%session_id, "write_input: session not found in session_connections");
+            format!("No transport for session {}", session_id)
+        })?;
 
     transport
         .send(ProtocolMessage::TerminalInput { session_id: session_id.clone(), data })
@@ -605,7 +626,6 @@ pub async fn write_input(
         .map_err(|e| format!("Send failed: {}", e))?;
 
     tracing::info!(%session_id, "write_input: sent OK");
-
     Ok(())
 }
 

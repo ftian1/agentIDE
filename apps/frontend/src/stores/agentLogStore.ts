@@ -46,12 +46,27 @@ export function initAgentLogListeners() {
         }
       );
 
-      listen<{ session_id: string; event_type: string }>('session:event', (event) => {
-        const p = event.payload;
-        useAgentLogStore
-          .getState()
-          ._push('session', `[session ${p.session_id.slice(0, 8)}] ${p.event_type}`);
-      });
+      listen<{ session_id: string; event_type: string; data?: Record<string, string> }>(
+        'session:event',
+        (event) => {
+          const p = event.payload;
+          const sid = p.session_id.slice(0, 8);
+          // Format launch command with details for debugging.
+          if (p.event_type === 'shellCommand' && p.data?.command) {
+            useAgentLogStore.getState()._push('session', `[session ${sid}] ▶ LAUNCH: ${p.data.command}`);
+            if (p.data.cwd) {
+              useAgentLogStore.getState()._push('session', `[session ${sid}]   cwd: ${p.data.cwd}`);
+            }
+            for (const [k, v] of Object.entries(p.data)) {
+              if (k !== 'command' && k !== 'cwd') {
+                useAgentLogStore.getState()._push('session', `[session ${sid}]   env: ${k}=${v}`);
+              }
+            }
+          } else {
+            useAgentLogStore.getState()._push('session', `[session ${sid}] ${p.event_type}`);
+          }
+        }
+      );
     })
     .catch(() => {
       // Tauri API not available (browser dev mode).

@@ -153,24 +153,19 @@ export function TerminalInstance({ sessionId, api, onReady, active = true }: Pro
   // When the terminal becomes visible (e.g. switching to the raw tab), its
   // container finally has real dimensions — refit and push the new size to the
   // PTY so the agent CLI re-renders at the correct column count.
+  // Also focus the terminal so keyboard input works immediately.
   useEffect(() => {
     if (!active) return;
-    // The terminal may have first mounted inside a hidden (display:none) tab,
-    // where xterm measured the character cell as 0/wrong — that's the real
-    // cause of the garbled letter spacing on first load (fine after a reconnect
-    // because by then the raw tab was already visible). fit() alone only
-    // recomputes row/col counts; it does NOT remeasure the glyph cell. Nudging
-    // fontFamily forces xterm to recompute cell dimensions from scratch, then
-    // we clear the glyph cache and refit.
     const id = requestAnimationFrame(() =>
       requestAnimationFrame(() => {
         try {
           const term = terminalRef.current;
           if (term) {
             const ff = term.options.fontFamily;
-            term.options.fontFamily = `${ff} `; // change identity → force remeasure
+            term.options.fontFamily = `${ff} `;
             term.options.fontFamily = ff;
             term.clearTextureAtlas?.();
+            term.focus();
           }
           fitAddonRef.current?.fit();
           if (term) api.resize(sessionId, term.cols, term.rows);

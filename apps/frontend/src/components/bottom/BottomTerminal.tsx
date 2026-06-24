@@ -14,7 +14,7 @@ import { useTerminalApi } from '../../hooks/useTerminalApi';
 import { useLayoutStore } from '../../stores/layoutStore';
 import { useConnectionStore } from '../../stores/connectionStore';
 
-const MAX_AUTO_RETRIES = 5;
+const MAX_AUTO_RETRIES = 10;
 
 export function BottomTerminal() {
   const api = useTerminalApi();

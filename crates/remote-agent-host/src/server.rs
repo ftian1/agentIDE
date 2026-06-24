@@ -413,6 +413,20 @@ impl Server {
             (original_cmd, base_args)
         };
 
+        // ── Capture launch info BEFORE exec_args / cwd are moved ──
+        let launch_cmd_str = format!("{} {}", command, exec_args.join(" "));
+        let launch_cwd = cwd.clone().unwrap_or_default();
+        let mut launch_data = std::collections::HashMap::new();
+        launch_data.insert("command".to_string(), launch_cmd_str);
+        launch_data.insert("cwd".to_string(), launch_cwd);
+        for (k, v) in &env {
+            if k.starts_with("ANTHROPIC_") || k.starts_with("OPENAI_")
+                || k == "TERM" || k.starts_with("__tap") || k.starts_with("__gateway")
+            {
+                launch_data.insert(k.clone(), v.clone());
+            }
+        }
+
         // Ensure TMPDIR exists (workaround for /tmp inode exhaustion on some hosts)
         for key in &["TMPDIR", "TMP", "TEMP"] {
             if let Some(dir) = env.get(&key.to_string()) {
@@ -452,6 +466,17 @@ impl Server {
                 });
             }
         };
+
+        // Send the captured launch info to the frontend for the AgentStdout panel.
+        let _ = transport_tx.send(ProtocolMessage::SessionEvent {
+            session_id: session_id.clone(),
+            event_type: shared_protocol::types::SessionEventType::ShellCommand,
+            data: launch_data,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        });
 
         let transport_tx2 = transport_tx.clone();
         let registry2 = self.registry.clone();

@@ -7,11 +7,12 @@
  * Level 2: Connection form (host, port, password, agent type) with progress output.
  */
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { ArrowLeft, Bot, Plus, Terminal, Wifi, WifiOff, X } from 'lucide-react';
+import { ArrowLeft, Bot, ChevronDown, ChevronRight, Plus, Terminal, Wifi, WifiOff, X } from 'lucide-react';
 import { listen } from '@tauri-apps/api/event';
 import { useConnectionStore } from '../../stores/connectionStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useLayoutStore } from '../../stores/layoutStore';
+import { useAgentEngineStore } from '../../stores/agentEngineStore';
 import type { ConnectionConfig } from '../../api/types';
 
 type AgentTool = 'claude' | 'copilot';
@@ -170,7 +171,7 @@ function OverviewView({
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="px-3 py-3 space-y-2">
+      <div className="px-3 py-3">
         <button
           onClick={onAddAgent}
           className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded
@@ -179,14 +180,6 @@ function OverviewView({
         >
           <Plus size={14} />
           Add Agent
-        </button>
-        <button
-          onClick={onConnect}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded
-                     border border-border bg-bg-tertiary text-text-secondary text-xs
-                     hover:text-text-primary transition-colors"
-        >
-          SSH Connect (manual)
         </button>
       </div>
 
@@ -268,7 +261,8 @@ function MachineCard({
   const allConnections = useConnectionStore((s) => s.connections);
   const spawn = useSessionStore((s) => s.spawn);
   const closeSession = useSessionStore((s) => s.close);
-  const setBottomSessionId = useLayoutStore((s) => s.setBottomPanelSessionId);
+  const setOpenModal = useLayoutStore((s) => s.setOpenModal);
+  const setLastConn = useAgentEngineStore((s) => s.setLastConn);
   const bottomSessionId = useLayoutStore((s) => s.bottomPanelSessionId);
 
   const [deleteCountdown, setDeleteCountdown] = useState(0);
@@ -315,6 +309,9 @@ function MachineCard({
     setReconnectError(null);
     setReconnectLog([]);
     setExpanded(true);
+
+    // Reset the bottom panel bash session so it auto-spawns against the new connection.
+    useLayoutStore.getState().setBottomPanelSessionId(null);
 
     let unlisten: any = null;
 
@@ -385,9 +382,22 @@ function MachineCard({
     <div className="rounded border border-border bg-bg-tertiary overflow-hidden">
       {/* Machine header */}
       <div className="flex items-stretch">
+        {/* Chevron toggle (expand/collapse sessions) */}
         <button
           onClick={() => setExpanded(!expanded)}
-          className="flex-1 flex items-center gap-2 px-3 py-2 hover:bg-bg-primary/30 transition-colors text-left min-w-0"
+          className="px-2 flex items-center text-text-secondary hover:text-text-primary transition-colors"
+          title={expanded ? 'Collapse' : 'Expand'}
+        >
+          {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </button>
+
+        {/* Main click → open Agent Engine Settings modal with pre-filled config */}
+        <button
+          onClick={() => {
+            setLastConn({ host, port, user, authMethod: savedAuthMethod as 'key' | 'password' | 'agent' });
+            setOpenModal('agentEngine');
+          }}
+          className="flex-1 flex items-center gap-2 px-2 py-2 hover:bg-bg-primary/30 transition-colors text-left min-w-0"
         >
           {isConnected ? (
             <Wifi size={12} className="text-green-400 flex-shrink-0" />
@@ -546,7 +556,7 @@ function MachineCard({
                   }
                   if (bottomSessionId) {
                     try { await closeSession(bottomSessionId); } catch { /* ignore */ }
-                    setBottomSessionId(null);
+                    useLayoutStore.getState().setBottomPanelSessionId(null);
                   }
                   disconnect(connectionId);
                 }}

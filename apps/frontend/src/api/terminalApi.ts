@@ -72,7 +72,8 @@ export function createTerminalApi(): TerminalApi {
 
   return {
     async spawn(connectionId: string, req: SpawnRequest): Promise<SessionInfo> {
-      return invoke<SessionInfo>('spawn_session', {
+      console.log(`[api] spawn: conn=${connectionId} tool=${req.tool} args=${JSON.stringify(req.args)} cwd=${req.cwd} container=${req.container}`);
+      const info = await invoke<SessionInfo>('spawn_session', {
         connectionId,
         req: {
           tool: req.tool,
@@ -84,10 +85,13 @@ export function createTerminalApi(): TerminalApi {
           terminal_rows: 24,
         },
       });
+      console.log(`[api] spawn OK: session=${info.id} conn=${info.connectionId} tool=${info.tool} pid=${info.pid}`);
+      return info;
     },
 
     async write(sessionId: string, data: string): Promise<void> {
       const bytes = new TextEncoder().encode(data);
+      console.log(`[api] write: session=${sessionId} len=${bytes.length} preview=${JSON.stringify(data.slice(0, 20))}`);
       await invoke('write_input', {
         connectionId: '',
         sessionId,

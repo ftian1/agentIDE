@@ -212,7 +212,7 @@ export function App() {
             </SecondarySidebar>
           ) : undefined
         }
-        bottomPanelContent={bottomContent}
+        bottomPanelContent={isDebugView ? undefined : bottomContent}
         agentPanel={
           showChrome && agentPanelVisible ? (
             <AppShell.AgentColumn>
