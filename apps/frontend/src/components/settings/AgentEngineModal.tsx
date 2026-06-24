@@ -165,31 +165,42 @@ export function AgentEngineModal({ onClose }: Props) {
         if (key.trim()) env[key.trim()] = value;
       }
 
-      // ── ANTHROPIC env vars: prefer active model's provider, fall back to
-      //     the first configured provider that has an API key.
-      const activeProvider = activeModel
-        ? providers.find((p) => p.id === activeModel.providerId)
-        : undefined;
-      const anyProvider = activeProvider
-        ?? providers.find((p) => p.apiKey)
-        ?? providers.find((p) => p.copilotToken);
+      // ── ANTHROPIC env vars ─────────────────────────────────────
+      const cliAuthKey = cfg.authKey?.trim();
+      if (cliAuthKey) {
+        // User provided their own key → pass directly, CLI uses it to auth.
+        env.ANTHROPIC_API_KEY = cliAuthKey;
+        log('system', 'Auth: using user-provided CLI auth key');
+      } else {
+        // No user key → route through the gateway/proxy on the remote agent.
+        // The proxy sets ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN=dummy;
+        // it injects the real provider token when forwarding.
+        const provider = activeModel
+          ? providers.find((p) => p.id === activeModel.providerId)
+          : providers.find((p) => p.apiKey) ?? providers.find((p) => p.copilotToken);
 
-      if (anyProvider?.kind === 'copilot' && anyProvider.copilotToken) {
-        env.__gateway_provider = 'copilot';
-        env.__gateway_token = anyProvider.copilotToken;
-        env.__gateway_mode = 'passthrough';
-      } else if (anyProvider?.apiKey) {
-        const base = (anyProvider.baseUrl || '').replace(/\/+$/, '');
-        if (anyProvider.kind === 'deepseek') {
-          env.__gateway_provider = 'deepseek';
-          env.__gateway_token = anyProvider.apiKey;
+        if (provider?.kind === 'copilot' && provider.copilotToken) {
+          env.__gateway_provider = 'copilot';
+          env.__gateway_token = provider.copilotToken;
           env.__gateway_mode = 'passthrough';
-          env.ANTHROPIC_BASE_URL = `${base}/anthropic`;
-        } else if (base) {
-          env.ANTHROPIC_BASE_URL = base;
-          env.ANTHROPIC_API_KEY = anyProvider.apiKey;
+          log('system', 'Auth: using Copilot gateway token');
+        } else if (provider?.apiKey) {
+          const base = (provider.baseUrl || '').replace(/\/+$/, '');
+          if (provider.kind === 'deepseek') {
+            env.__gateway_provider = 'deepseek';
+            env.__gateway_token = provider.apiKey;
+            env.__gateway_mode = 'passthrough';
+            log('system', `Auth: using DeepSeek gateway → ${base}/anthropic`);
+          } else {
+            env.__gateway_provider = 'openai';
+            env.__gateway_token = provider.apiKey;
+            env.__gateway_mode = 'passthrough';
+            log('system', `Auth: using provider gateway → ${base}`);
+          }
         } else {
-          env.ANTHROPIC_API_KEY = anyProvider.apiKey;
+          // No provider configured either — still pass dummy so tap proxy can
+          // record traffic; user must have API key set in remote shell profile.
+          log('system', 'Auth: no provider, no auth key — passing dummy (tap will not inject auth)');
         }
       }
 
@@ -490,6 +501,22 @@ function ClaudeAgentTab({ cfg, setConfig, modelOptions, hasModels, onConfigurePr
           value={cfg.extraArgs}
           onChange={(e) => setConfig({ extraArgs: e.target.value })}
           placeholder="Extra args (free text, e.g. --model opus)"
+        />
+      </div>
+
+      <div>
+        <label className={labelCls}>
+          Agent CLI Auth Key
+          <span className="text-text-secondary font-normal ml-1">
+            — if empty, gateway/proxy handles auth (requires configured provider)
+          </span>
+        </label>
+        <input
+          type="password"
+          className={inputCls}
+          value={cfg.authKey ?? ''}
+          onChange={(e) => setConfig({ authKey: e.target.value })}
+          placeholder="sk-ant-… or sk-… (leave empty to use provider gateway)"
         />
       </div>
 

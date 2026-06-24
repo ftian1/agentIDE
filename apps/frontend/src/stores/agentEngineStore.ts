@@ -19,6 +19,9 @@ export interface AgentEngineConfig {
   envModels: Record<string, string>;
   /** Generic key/value env vars (non-Claude agents, or extras). */
   extraEnv: { key: string; value: string }[];
+  /** Direct API key for the CLI. When set, passes ANTHROPIC_API_KEY.
+   *  When empty, the gateway/proxy handles auth with ANTHROPIC_AUTH_TOKEN=dummy. */
+  authKey: string;
 }
 
 export interface LastConn {
@@ -29,7 +32,7 @@ export interface LastConn {
 }
 
 function emptyConfig(): AgentEngineConfig {
-  return { workDir: '', argPresets: [], extraArgs: '', envModels: {}, extraEnv: [] };
+  return { workDir: '', argPresets: [], extraArgs: '', envModels: {}, extraEnv: [], authKey: '' };
 }
 
 const DEFAULT_CONFIGS: Record<AgentKind, AgentEngineConfig> = {
