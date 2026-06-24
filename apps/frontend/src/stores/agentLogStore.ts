@@ -51,7 +51,6 @@ export function initAgentLogListeners() {
         (event) => {
           const p = event.payload;
           const sid = p.session_id.slice(0, 8);
-          // Format launch command with details for debugging.
           if (p.event_type === 'shellCommand' && p.data?.command) {
             useAgentLogStore.getState()._push('session', `[session ${sid}] ▶ LAUNCH: ${p.data.command}`);
             if (p.data.cwd) {
@@ -67,6 +66,11 @@ export function initAgentLogListeners() {
           }
         }
       );
+
+      // Rust backend (Windows Tauri) → AgentStdout bridge
+      listen<{ text: string; ts: number }>('backend:log', (event) => {
+        useAgentLogStore.getState()._push('agent', `[backend] ${event.payload.text}`);
+      });
     })
     .catch(() => {
       // Tauri API not available (browser dev mode).

@@ -159,10 +159,12 @@ pub struct HttpTrafficEvent {
 #[tauri::command]
 pub async fn spawn_session(
     state: State<'_, AppState>,
-    _app_handle: tauri::AppHandle,
+    app_handle: tauri::AppHandle,
     connection_id: String,
     req: SpawnRequest,
 ) -> Result<SessionInfo, String> {
+    use crate::backend_log;
+    backend_log!(&app_handle, "[spawn] req: conn={} tool={} args={:?}", connection_id, req.tool, req.args);
     // Look up transport: prefer per-connection transport, fall back to local agent
     let transport: Arc<dyn crate::transport::Transport> =
         if let Some(t) = state.connection_transports.get(&connection_id) {
@@ -232,6 +234,7 @@ pub async fn spawn_session(
     tracing::info!(%session_id, pid, "Session spawned (ack via demux relay)");
     // Record session → connection mapping for write/resize/close.
     tracing::info!(%session_id, %connection_id, "spawn_session: recording session→connection mapping");
+    backend_log!(&app_handle, "[spawn] OK session={} conn={} pid={}", session_id, connection_id, pid);
     state.session_connections.insert(session_id.clone(), connection_id.clone());
 
     Ok(SessionInfo {
@@ -270,7 +273,9 @@ pub async fn connection_demux_relay(
     connection_id: String,
 ) {
     use tauri::Manager;
+    use crate::backend_log;
     tracing::info!(%connection_id, "Demux relay started — owns transport recv()");
+    backend_log!(&app_handle, "[demux] relay started conn={}", connection_id);
 
     // Per-session scratch state (multiple sessions share this relay now).
     let mut terminal_bufs: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -282,6 +287,7 @@ pub async fn connection_demux_relay(
             // ── Spawn acks/nacks: resolve the waiting spawn_session ──
             Ok(Some(ProtocolMessage::SpawnSessionAck { session_id: sid, pid, tool_version })) => {
                 tracing::info!(%connection_id, ack_session = %sid, pid, "Demux got SpawnSessionAck");
+                backend_log!(&app_handle, "[demux] SpawnSessionAck session={} pid={}", sid, pid);
                 let state = app_handle.state::<crate::AppState>();
                 if let Some((_, tx)) = state.pending_acks.remove(&sid) {
                     let _ = tx.send(Ok((pid, tool_version)));
@@ -609,13 +615,16 @@ pub async fn write_input(
     _connection_id: String,
     session_id: String,
     data: Vec<u8>,
+    app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
-    tracing::info!(%session_id, len = data.len(),
-        preview = %String::from_utf8_lossy(&data[..data.len().min(30)]),
-        "write_input: looking up transport");
+    use crate::backend_log;
+    let preview = String::from_utf8_lossy(&data[..data.len().min(20)]);
+    tracing::info!(%session_id, len = data.len(), %preview, "write_input: looking up transport");
+    backend_log!(&app_handle, "[write_input] session={} len={} preview={}", session_id, data.len(), preview);
 
     let transport = resolve_session_transport(&state, &session_id)
         .ok_or_else(|| {
+            backend_log!(&app_handle, "[write_input] FAIL session={} not found", session_id);
             tracing::error!(%session_id, "write_input: session not found in session_connections");
             format!("No transport for session {}", session_id)
         })?;
@@ -623,7 +632,10 @@ pub async fn write_input(
     transport
         .send(ProtocolMessage::TerminalInput { session_id: session_id.clone(), data })
         .await
-        .map_err(|e| format!("Send failed: {}", e))?;
+        .map_err(|e| {
+            backend_log!(&app_handle, "[write_input] FAIL session={} send error: {}", session_id, e);
+            format!("Send failed: {}", e)
+        })?;
 
     tracing::info!(%session_id, "write_input: sent OK");
     Ok(())
