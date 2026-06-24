@@ -139,9 +139,12 @@ export function AgentEngineModal({ onClose }: Props) {
         connId = info.id;
       }
 
-      // Build args.
+      // Build args. For Claude, always include --dangerously-skip-permissions
+      // since this is an automated/IDE context (the user approves via the
+      // frontend approval queue, not the CLI prompt).
       const args: string[] = [];
       if (agent === 'claude') {
+        args.push('--dangerously-skip-permissions');
         for (const id of cfg.argPresets) {
           const preset = CLAUDE_ARG_PRESETS.find((p) => p.id === id);
           if (preset) args.push(...preset.tokens);
@@ -162,31 +165,31 @@ export function AgentEngineModal({ onClose }: Props) {
         if (key.trim()) env[key.trim()] = value;
       }
 
-      // Third-party provider routing (unified with tap proxy).
+      // ── ANTHROPIC env vars: prefer active model's provider, fall back to
+      //     the first configured provider that has an API key.
       const activeProvider = activeModel
         ? providers.find((p) => p.id === activeModel.providerId)
         : undefined;
-      if (activeProvider?.kind === 'copilot' && activeProvider.copilotToken) {
+      const anyProvider = activeProvider
+        ?? providers.find((p) => p.apiKey)
+        ?? providers.find((p) => p.copilotToken);
+
+      if (anyProvider?.kind === 'copilot' && anyProvider.copilotToken) {
         env.__gateway_provider = 'copilot';
-        env.__gateway_token = activeProvider.copilotToken;
+        env.__gateway_token = anyProvider.copilotToken;
         env.__gateway_mode = 'passthrough';
-      } else if (activeProvider && activeProvider.apiKey) {
-        // Non-Copilot provider with API key → set ANTHROPIC env vars.
-        // For OpenAI-compatible providers that support the Anthropic API
-        // (e.g. DeepSeek /anthropic), route through the gateway so the
-        // tap proxy can record traffic and inject auth.
-        const base = (activeProvider.baseUrl || '').replace(/\/+$/, '');
-        if (activeProvider.kind === 'deepseek') {
-          // DeepSeek has an Anthropic-compatible Messages API at /anthropic
+      } else if (anyProvider?.apiKey) {
+        const base = (anyProvider.baseUrl || '').replace(/\/+$/, '');
+        if (anyProvider.kind === 'deepseek') {
           env.__gateway_provider = 'deepseek';
-          env.__gateway_token = activeProvider.apiKey;
+          env.__gateway_token = anyProvider.apiKey;
           env.__gateway_mode = 'passthrough';
           env.ANTHROPIC_BASE_URL = `${base}/anthropic`;
         } else if (base) {
           env.ANTHROPIC_BASE_URL = base;
-          env.ANTHROPIC_API_KEY = activeProvider.apiKey;
+          env.ANTHROPIC_API_KEY = anyProvider.apiKey;
         } else {
-          env.ANTHROPIC_API_KEY = activeProvider.apiKey;
+          env.ANTHROPIC_API_KEY = anyProvider.apiKey;
         }
       }
 
