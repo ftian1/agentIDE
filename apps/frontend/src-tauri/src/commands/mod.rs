@@ -1,4 +1,5 @@
 pub mod approval;
+pub mod config;
 pub mod connection;
 pub mod files;
 pub mod llm;

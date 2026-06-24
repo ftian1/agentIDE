@@ -222,7 +222,11 @@ pub fn run() {
             commands::tap::save_tap_settings,
             commands::tap::read_tap_traces,
             commands::tap::clear_tap_traces,
+            commands::tap::load_tap_exchanges_db,
+            commands::tap::clear_tap_exchanges_db,
             commands::approval::respond_approval,
+            commands::config::load_app_config,
+            commands::config::save_app_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
