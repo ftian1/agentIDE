@@ -270,7 +270,6 @@ export function AgentEngineModal({ onClose }: Props) {
               user={user} setUser={setUser}
               authMethod={authMethod} setAuthMethod={setAuthMethod}
               password={password} setPassword={setPassword}
-              agent={agent} setAgent={setAgent}
               showErrors={showErrors}
             />
           ) : agent === 'claude' ? (
@@ -280,12 +279,16 @@ export function AgentEngineModal({ onClose }: Props) {
               modelOptions={modelOptions}
               hasModels={hasModels}
               onConfigureProviders={() => setOpenModal('llmProviders')}
+              agent={agent}
+              setAgent={setAgent}
             />
           ) : (
             <GenericAgentTab
               label={meta.label}
               cfg={cfg}
               setConfig={(patch) => setConfig(agent, patch)}
+              agent={agent}
+              setAgent={setAgent}
             />
           )}
 
@@ -350,7 +353,6 @@ interface ConnectionTabProps {
   user: string; setUser: (v: string) => void;
   authMethod: 'key' | 'password' | 'agent'; setAuthMethod: (v: 'key' | 'password' | 'agent') => void;
   password: string; setPassword: (v: string) => void;
-  agent: AgentKind; setAgent: (v: AgentKind) => void;
   /** Set to true after the first "Continue" click to show validation errors. */
   showErrors: boolean;
 }
@@ -429,18 +431,6 @@ function ConnectionTab(p: ConnectionTabProps) {
         </div>
       )}
 
-      <div>
-        <label className={labelCls}>Agent</label>
-        <select
-          className={inputCls(false)}
-          value={p.agent}
-          onChange={(e) => p.setAgent(e.target.value as AgentKind)}
-        >
-          {AGENTS.map((a) => (
-            <option key={a.kind} value={a.kind}>{a.label}</option>
-          ))}
-        </select>
-      </div>
     </>
   );
 }
@@ -453,9 +443,11 @@ interface ClaudeTabProps {
   modelOptions: { providerLabel: string; modelId: string }[];
   hasModels: boolean;
   onConfigureProviders: () => void;
+  agent: AgentKind;
+  setAgent: (v: AgentKind) => void;
 }
 
-function ClaudeAgentTab({ cfg, setConfig, modelOptions, hasModels, onConfigureProviders }: ClaudeTabProps) {
+function ClaudeAgentTab({ cfg, setConfig, modelOptions, hasModels, onConfigureProviders, agent, setAgent }: ClaudeTabProps) {
   const togglePreset = (id: string) => {
     const next = cfg.argPresets.includes(id)
       ? cfg.argPresets.filter((x) => x !== id)
@@ -465,6 +457,37 @@ function ClaudeAgentTab({ cfg, setConfig, modelOptions, hasModels, onConfigurePr
 
   return (
     <>
+      <div className="flex gap-3">
+        <div className="flex-1">
+          <label className={labelCls}>Agent</label>
+          <select
+            className={inputCls}
+            value={agent}
+            onChange={(e) => setAgent(e.target.value as AgentKind)}
+          >
+            {AGENTS.map((a) => (
+              <option key={a.kind} value={a.kind}>{a.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label className={labelCls}>
+          Agent CLI Auth Key
+          <span className="text-text-secondary font-normal ml-1">
+            — if empty, gateway/proxy handles auth
+          </span>
+        </label>
+        <input
+          type="password"
+          className={inputCls}
+          value={cfg.authKey ?? ''}
+          onChange={(e) => setConfig({ authKey: e.target.value })}
+          placeholder="sk-ant-… or sk-…"
+        />
+      </div>
+
       <div>
         <label className={labelCls}>Work Directory</label>
         <input
@@ -501,22 +524,6 @@ function ClaudeAgentTab({ cfg, setConfig, modelOptions, hasModels, onConfigurePr
           value={cfg.extraArgs}
           onChange={(e) => setConfig({ extraArgs: e.target.value })}
           placeholder="Extra args (free text, e.g. --model opus)"
-        />
-      </div>
-
-      <div>
-        <label className={labelCls}>
-          Agent CLI Auth Key
-          <span className="text-text-secondary font-normal ml-1">
-            — if empty, gateway/proxy handles auth (requires configured provider)
-          </span>
-        </label>
-        <input
-          type="password"
-          className={inputCls}
-          value={cfg.authKey ?? ''}
-          onChange={(e) => setConfig({ authKey: e.target.value })}
-          placeholder="sk-ant-… or sk-… (leave empty to use provider gateway)"
         />
       </div>
 
@@ -568,9 +575,11 @@ interface GenericTabProps {
   label: string;
   cfg: import('../../stores/agentEngineStore').AgentEngineConfig;
   setConfig: (patch: Partial<import('../../stores/agentEngineStore').AgentEngineConfig>) => void;
+  agent: AgentKind;
+  setAgent: (v: AgentKind) => void;
 }
 
-function GenericAgentTab({ label, cfg, setConfig }: GenericTabProps) {
+function GenericAgentTab({ label, cfg, setConfig, agent, setAgent }: GenericTabProps) {
   const addEnv = () => setConfig({ extraEnv: [...cfg.extraEnv, { key: '', value: '' }] });
   const updateEnv = (i: number, patch: Partial<{ key: string; value: string }>) => {
     const next = cfg.extraEnv.map((e, idx) => (idx === i ? { ...e, ...patch } : e));
@@ -581,6 +590,33 @@ function GenericAgentTab({ label, cfg, setConfig }: GenericTabProps) {
 
   return (
     <>
+      <div>
+        <label className={labelCls}>Agent</label>
+        <select
+          className={inputCls}
+          value={agent}
+          onChange={(e) => setAgent(e.target.value as AgentKind)}
+        >
+          {AGENTS.map((a) => (
+            <option key={a.kind} value={a.kind}>{a.label}</option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <label className={labelCls}>
+          Agent CLI Auth Key
+          <span className="text-text-secondary font-normal ml-1">— if empty, gateway/proxy handles auth</span>
+        </label>
+        <input
+          type="password"
+          className={inputCls}
+          value={cfg.authKey ?? ''}
+          onChange={(e) => setConfig({ authKey: e.target.value })}
+          placeholder="sk-ant-… or sk-…"
+        />
+      </div>
+
       <p className="text-xs text-text-secondary">{label} — generic configuration.</p>
       <div>
         <label className={labelCls}>Work Directory</label>

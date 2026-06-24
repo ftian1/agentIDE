@@ -27,7 +27,6 @@ const CodeChangeEditor = lazy(() =>
 // TerminalPane is NOT lazy — needed immediately when session spawns (race with relay events)
 import { AgentColumnPanel } from './components/agentpanel/AgentColumnPanel';
 import { AgentManagerPanel } from './components/agent/AgentManagerPanel';
-import { TerminalDebugOverlay } from './components/debug/TerminalDebugOverlay';
 const SessionDetail = lazy(() =>
   import('./components/detail/SessionDetail').then(m => ({ default: m.SessionDetail })));
 const ConnectionDialog = lazy(() =>
@@ -270,7 +269,6 @@ export function App() {
         </Suspense>
       )}
 
-      <TerminalDebugOverlay />
     </>
   );
 }
