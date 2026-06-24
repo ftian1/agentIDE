@@ -162,15 +162,31 @@ export function AgentEngineModal({ onClose }: Props) {
       }
 
       // Third-party provider routing (unified with tap proxy).
-      // Token presence auto-starts the proxy on the remote agent; no separate
-      // __gateway_enabled or __tap_enabled needed.
       const activeProvider = activeModel
         ? providers.find((p) => p.id === activeModel.providerId)
         : undefined;
       if (activeProvider?.kind === 'copilot' && activeProvider.copilotToken) {
         env.__gateway_provider = 'copilot';
         env.__gateway_token = activeProvider.copilotToken;
-        env.__gateway_mode = 'passthrough'; // Copilot speaks Anthropic natively
+        env.__gateway_mode = 'passthrough';
+      } else if (activeProvider && activeProvider.apiKey) {
+        // Non-Copilot provider with API key → set ANTHROPIC env vars.
+        // For OpenAI-compatible providers that support the Anthropic API
+        // (e.g. DeepSeek /anthropic), route through the gateway so the
+        // tap proxy can record traffic and inject auth.
+        const base = (activeProvider.baseUrl || '').replace(/\/+$/, '');
+        if (activeProvider.kind === 'deepseek') {
+          // DeepSeek has an Anthropic-compatible Messages API at /anthropic
+          env.__gateway_provider = 'deepseek';
+          env.__gateway_token = activeProvider.apiKey;
+          env.__gateway_mode = 'passthrough';
+          env.ANTHROPIC_BASE_URL = `${base}/anthropic`;
+        } else if (base) {
+          env.ANTHROPIC_BASE_URL = base;
+          env.ANTHROPIC_API_KEY = activeProvider.apiKey;
+        } else {
+          env.ANTHROPIC_API_KEY = activeProvider.apiKey;
+        }
       }
 
       const sessionInfo = await spawn(connId, {

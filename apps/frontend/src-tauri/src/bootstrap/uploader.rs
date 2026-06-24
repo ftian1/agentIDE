@@ -108,8 +108,9 @@ pub async fn start_agent(
     home_dir: &str,
 ) -> anyhow::Result<std::sync::Arc<crate::transport::ssh_channel::SshChannelTransport>> {
     let path = format!("{}/.remote-agent-host/agent", home_dir.trim_end_matches('/'));
-    let ch = ssh::open_exec_channel(session, &format!("{} --mode stdio --log-level info", path))
-        .await
+    let log_path = format!("{}/.remote-agent-host/agent.log", home_dir.trim_end_matches('/'));
+    let cmd = format!("{} --mode stdio --log-level info --log-file {}", path, log_path);
+    let ch = ssh::open_exec_channel(session, &cmd).await
         .context("start agent")?;
     Ok(std::sync::Arc::new(crate::transport::ssh_channel::SshChannelTransport::new(ch)))
 }
