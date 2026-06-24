@@ -1,9 +1,9 @@
 /**
- * Agent Engine Store — persisted per-agent launch configuration for the
- * "Agent Engine Settings" modal. Persistence is localStorage (same lightweight
- * pattern as layoutStore) since this is purely frontend launch config.
+ * Agent Engine Store — persisted per-agent launch configuration.
+ * Persisted to SQLite (primary) + localStorage (fallback).
  */
 import { create } from 'zustand';
+import { loadPersisted, savePersisted } from '../lib/storage';
 
 const STORE_KEY = 'remote-ai-ide:agent-engine';
 
@@ -50,29 +50,8 @@ interface Persisted {
   profiles: AgentProfile[];
 }
 
-function loadPersisted(): Persisted {
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<Persisted>;
-      return {
-        configs: { ...DEFAULT_CONFIGS, ...(parsed.configs ?? {}) },
-        lastConn: { ...DEFAULT_CONN, ...(parsed.lastConn ?? {}) },
-        profiles: parsed.profiles ?? [],
-      };
-    }
-  } catch {
-    /* ignore */
-  }
-  return { configs: DEFAULT_CONFIGS, lastConn: DEFAULT_CONN, profiles: [] };
-}
-
 function persist(state: Persisted) {
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(state));
-  } catch {
-    /* ignore */
-  }
+  savePersisted(STORE_KEY, state);
 }
 
 export interface AgentProfile {
@@ -99,6 +78,7 @@ function uid(): string {
 }
 
 interface AgentEngineStore {
+  _init: () => Promise<void>;
   configs: Record<AgentKind, AgentEngineConfig>;
   lastConn: LastConn;
   profiles: AgentProfile[];
@@ -108,12 +88,19 @@ interface AgentEngineStore {
   removeProfile: (id: string) => void;
 }
 
-export const useAgentEngineStore = create<AgentEngineStore>((set, get) => {
-  const initial = loadPersisted();
-  return {
-    configs: initial.configs,
-    lastConn: initial.lastConn,
-    profiles: initial.profiles ?? [],
+export const useAgentEngineStore = create<AgentEngineStore>((set, get) => ({
+    _init: async () => {
+      const saved = await loadPersisted<Persisted>(STORE_KEY, { configs: DEFAULT_CONFIGS, lastConn: DEFAULT_CONN, profiles: [] as AgentProfile[] });
+      set({
+        configs: { ...DEFAULT_CONFIGS, ...(saved.configs ?? {}) },
+        lastConn: { ...DEFAULT_CONN, ...(saved.lastConn ?? {}) },
+        profiles: saved.profiles ?? [],
+      });
+    },
+
+    configs: DEFAULT_CONFIGS,
+    lastConn: DEFAULT_CONN,
+    profiles: [],
 
     setConfig(kind, patch) {
       set((s) => {
@@ -148,5 +135,4 @@ export const useAgentEngineStore = create<AgentEngineStore>((set, get) => {
         return { profiles };
       });
     },
-  };
-});
+}));

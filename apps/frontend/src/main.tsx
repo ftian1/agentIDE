@@ -32,6 +32,10 @@ safeInit('agentLog', initAgentLogListeners);
 safeInit('perf', initPerfListeners);
 safeInit('httpTraffic', initHttpTrafficListeners);
 
+// Load persisted config from SQLite (async, non-blocking).
+import('./stores/layoutStore').then(({ useLayoutStore }) => { useLayoutStore.getState()._init(); });
+import('./stores/agentEngineStore').then(({ useAgentEngineStore }) => { useAgentEngineStore.getState()._init(); });
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   React.createElement(
     React.StrictMode,

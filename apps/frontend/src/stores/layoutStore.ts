@@ -2,37 +2,25 @@
  * Layout Store — Zustand store for IDE chrome layout state.
  *
  * Drives: ActivityBar, SecondarySidebar, EditorTabBar, BottomPanel, RightPanel.
+ * Persisted to SQLite (primary) + localStorage (fallback).
  */
 import { create } from 'zustand';
+import { savePersisted } from '../lib/storage';
 
 const LAYOUT_KEY = 'remote-ai-ide:layout';
 
-function loadPersisted(): Partial<LayoutStore> {
-  try {
-    const raw = localStorage.getItem(LAYOUT_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch { /* ignore */ }
-  return {};
-}
+const PERSIST_KEYS: (keyof LayoutStore)[] = [
+  'secondarySidebarWidth', 'bottomPanelHeight', 'bottomPanelVisible',
+  'secondarySidebarVisible', 'bottomPanelTab', 'topBarVisible',
+  'agentPanelVisible', 'agentColumnWidth',
+];
 
 function persistLayout(state: Partial<LayoutStore>) {
-  try {
-    const toSave: Record<string, unknown> = {};
-    for (const key of [
-      'secondarySidebarWidth',
-      'bottomPanelHeight',
-      'bottomPanelVisible',
-      'secondarySidebarVisible',
-      'bottomPanelTab',
-      'topBarVisible',
-      'agentPanelVisible',
-      'agentColumnWidth',
-    ]) {
-      const k = key as keyof LayoutStore;
-      if (state[k] !== undefined) toSave[key] = state[k];
-    }
-    localStorage.setItem(LAYOUT_KEY, JSON.stringify(toSave));
-  } catch { /* ignore */ }
+  const toSave: Record<string, unknown> = {};
+  for (const key of PERSIST_KEYS) {
+    if (state[key] !== undefined) toSave[key] = state[key];
+  }
+  savePersisted(LAYOUT_KEY, toSave);
 }
 
 export type ActivityId = 'agentManager' | 'explorer' | 'sessionManager' | 'search' | 'approvals' | 'tools' | 'sourceControl' | 'models' | 'debug' | 'settings';
@@ -50,6 +38,8 @@ export interface EditorTab {
 }
 
 export interface LayoutStore {
+  _init: () => Promise<void>;
+
   // Activity bar
   activeActivity: ActivityId;
   setActiveActivity: (id: ActivityId) => void;
@@ -103,13 +93,11 @@ export interface LayoutStore {
   setActiveEditorTab: (id: string | null) => void;
 }
 
-const persisted = loadPersisted();
-
 export const useLayoutStore = create<LayoutStore>((set) => ({
   activeActivity: 'explorer',
   setActiveActivity: (id) => set({ activeActivity: id }),
 
-  topBarVisible: persisted.topBarVisible ?? true,
+  topBarVisible: true,
   toggleTopBar: () =>
     set((s) => {
       const v = !s.topBarVisible;
@@ -123,8 +111,8 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
   openModal: null,
   setOpenModal: (id) => set({ openModal: id }),
 
-  secondarySidebarVisible: persisted.secondarySidebarVisible ?? true,
-  secondarySidebarWidth: persisted.secondarySidebarWidth ?? 260,
+  secondarySidebarVisible: true,
+  secondarySidebarWidth: 260,
   toggleSecondarySidebar: () =>
     set((s) => {
       const v = !s.secondarySidebarVisible;
@@ -137,13 +125,9 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
     set({ secondarySidebarWidth: clamped });
   },
 
-  bottomPanelVisible: persisted.bottomPanelVisible ?? true,
-  bottomPanelHeight: persisted.bottomPanelHeight ?? 220,
-  bottomPanelTab: (() => {
-    const valid: BottomPanelTab[] = ['terminal', 'agentStdout', 'mcpLogs', 'fileSync', 'problems', 'ports', 'httpTraffic'];
-    const p = persisted.bottomPanelTab as BottomPanelTab | undefined;
-    return p && valid.includes(p) ? p : 'terminal';
-  })(),
+  bottomPanelVisible: true,
+  bottomPanelHeight: 220,
+  bottomPanelTab: 'terminal',
   setBottomPanelTab: (tab) => {
     persistLayout({ bottomPanelTab: tab });
     set({ bottomPanelTab: tab, bottomPanelVisible: true });
@@ -168,14 +152,14 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
   toggleRightPanel: () =>
     set((s) => ({ rightPanelVisible: !s.rightPanelVisible })),
 
-  agentPanelVisible: persisted.agentPanelVisible ?? true,
+  agentPanelVisible: true,
   toggleAgentPanel: () =>
     set((s) => {
       const v = !s.agentPanelVisible;
       persistLayout({ agentPanelVisible: v });
       return { agentPanelVisible: v };
     }),
-  agentColumnWidth: persisted.agentColumnWidth ?? 720,
+  agentColumnWidth: 720,
   setAgentColumnWidth: (w) => {
     // Lower bound ~660px so the native agent terminal keeps ≥80 columns at the
     // 14px monospace font (≈8.4px/col + padding) — below that the CLI TUI wraps
@@ -183,6 +167,14 @@ export const useLayoutStore = create<LayoutStore>((set) => ({
     const clamped = Math.max(660, Math.min(1100, w));
     persistLayout({ agentColumnWidth: clamped });
     set({ agentColumnWidth: clamped });
+  },
+
+  _init: async () => {
+    const { loadPersisted } = await import('../lib/storage');
+    const saved = await loadPersisted<Partial<LayoutStore>>(LAYOUT_KEY, {});
+    if (saved && Object.keys(saved).length > 0) {
+      useLayoutStore.setState((s) => ({ ...s, ...saved }));
+    }
   },
 
   editorTabs: [],
