@@ -236,7 +236,7 @@ export function App() {
         }
         overlay={
           isDebugView ? (
-            <div className="absolute inset-0 z-50 bg-bg-primary overflow-hidden">
+            <div className="absolute left-12 right-0 top-0 bottom-0 z-50 bg-bg-primary overflow-hidden">
               <DebugView />
             </div>
           ) : undefined
