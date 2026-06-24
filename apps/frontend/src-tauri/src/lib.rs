@@ -82,17 +82,31 @@ pub fn run() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
-            // ── Dev mode: load frontend from a remote Vite dev server ──
+            // ── Dev mode: recreate main window with remote Vite dev server ──
             // Set REMOTE_AI_IDE_DEV_URL=http://<linux-ip>:1420 to skip rebuilding
             // the exe on every frontend change. The dev server must be running on
             // the Linux machine:  pnpm dev --host 0.0.0.0
             if let Ok(dev_url) = std::env::var("REMOTE_AI_IDE_DEV_URL") {
                 eprintln!("[remote-ai-ide] DEV MODE: loading frontend from {dev_url}");
-                // Tauri re-exports the `url` crate.
-                if let Some(window) = app.get_webview_window("main") {
-                    if let Ok(u) = dev_url.parse::<tauri::Url>() {
-                        let _ = window.navigate(u);
-                    }
+                use tauri::WebviewUrl;
+                use tauri::WebviewWindowBuilder;
+                // Close the embedded-frontend window that Tauri auto-created.
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.close();
+                }
+                // Open a fresh window pointing at the dev server.  Because the
+                // window is born with the dev-server origin, Tauri's IPC bridge
+                // permits `invoke()` calls — unlike `window.navigate()` which
+                // changes the origin post-creation and triggers the ACL block.
+                if let Ok(u) = dev_url.parse::<tauri::Url>() {
+                    let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(u))
+                        .title("Remote AI IDE [DEV]")
+                        .inner_size(1600.0, 1000.0)
+                        .min_inner_size(900.0, 600.0)
+                        .resizable(true)
+                        .maximized(true)
+                        .visible(true)
+                        .build();
                 }
             }
 
