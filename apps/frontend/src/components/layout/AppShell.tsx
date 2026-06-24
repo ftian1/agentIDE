@@ -53,9 +53,11 @@ export function AppShell({
             {children}
           </div>
           {/* Bottom panel (terminal / problems / output / code changes) */}
-          <BottomPanel>
-            {bottomPanelContent}
-          </BottomPanel>
+          {bottomPanelContent && (
+            <BottomPanel>
+              {bottomPanelContent}
+            </BottomPanel>
+          )}
         </div>
 
         {/* Agent panel (right-side Claude Code conversation) */}
