@@ -348,9 +348,12 @@ impl Server {
             || tap_cfg.gateway_token.is_some();
         if need_proxy {
             // Upstream: gateway provider takes priority; fall back to tool default.
+            // DeepSeek's Anthropic-compatible API lives under /anthropic, so the
+            // proxy must prepend /anthropic to the request path when forwarding.
             let upstream = if tap_cfg.gateway_provider.is_some() {
                 tap_cfg.gateway_provider.as_deref().map(|p| match p {
                     "copilot" => "api.githubcopilot.com".to_string(),
+                    "deepseek" => "api.deepseek.com".to_string(),
                     other => format!("api.{other}.com"),
                 })
             } else if matches!(tap_cfg.mode, shared_protocol::types::TapMode::Reverse) {
@@ -358,6 +361,11 @@ impl Server {
             } else {
                 None
             };
+            let gateway_path_prefix = tap_cfg.gateway_provider.as_deref()
+                .and_then(|p| match p {
+                    "deepseek" => Some("/anthropic".to_string()),
+                    _ => None,
+                });
             match crate::tap::proxy::start_session_proxy(
                 session_id.clone(),
                 transport_tx.clone(),
@@ -367,6 +375,7 @@ impl Server {
                 tap_cfg.gateway_provider.clone(),
                 tap_cfg.gateway_token.clone(),
                 tap_cfg.gateway_mode.clone(),
+                gateway_path_prefix.clone(),
             ) {
                 Ok(handle) => {
                     let port = handle.port;

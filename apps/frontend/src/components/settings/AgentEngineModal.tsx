@@ -281,6 +281,11 @@ export function AgentEngineModal({ onClose }: Props) {
               onConfigureProviders={() => setOpenModal('llmProviders')}
               agent={agent}
               setAgent={setAgent}
+              isCopilotProvider={
+                activeModel
+                  ? providers.find((p) => p.id === activeModel.providerId)?.kind === 'copilot'
+                  : false
+              }
             />
           ) : (
             <GenericAgentTab
@@ -445,9 +450,11 @@ interface ClaudeTabProps {
   onConfigureProviders: () => void;
   agent: AgentKind;
   setAgent: (v: AgentKind) => void;
+  /** True when the active LLM provider is Copilot (uses OAuth, not API key). */
+  isCopilotProvider: boolean;
 }
 
-function ClaudeAgentTab({ cfg, setConfig, modelOptions, hasModels, onConfigureProviders, agent, setAgent }: ClaudeTabProps) {
+function ClaudeAgentTab({ cfg, setConfig, modelOptions, hasModels, onConfigureProviders, agent, setAgent, isCopilotProvider }: ClaudeTabProps) {
   const togglePreset = (id: string) => {
     const next = cfg.argPresets.includes(id)
       ? cfg.argPresets.filter((x) => x !== id)
@@ -472,21 +479,28 @@ function ClaudeAgentTab({ cfg, setConfig, modelOptions, hasModels, onConfigurePr
         </div>
       </div>
 
-      <div>
-        <label className={labelCls}>
-          Agent CLI Auth Key
-          <span className="text-text-secondary font-normal ml-1">
-            — if empty, gateway/proxy handles auth
-          </span>
-        </label>
-        <input
-          type="password"
-          className={inputCls}
-          value={cfg.authKey ?? ''}
-          onChange={(e) => setConfig({ authKey: e.target.value })}
-          placeholder="sk-ant-… or sk-…"
-        />
-      </div>
+      {!isCopilotProvider && (
+        <div>
+          <label className={labelCls}>
+            Agent CLI Auth Key
+            <span className="text-text-secondary font-normal ml-1">
+              — if empty, gateway/proxy handles auth
+            </span>
+          </label>
+          <input
+            type="password"
+            className={inputCls}
+            value={cfg.authKey ?? ''}
+            onChange={(e) => setConfig({ authKey: e.target.value })}
+            placeholder="sk-ant-… or sk-…"
+          />
+        </div>
+      )}
+      {isCopilotProvider && (
+        <div className="p-2 rounded bg-bg-tertiary border border-border text-xs text-text-secondary">
+          Copilot uses GitHub OAuth — no API key needed.
+        </div>
+      )}
 
       <div>
         <label className={labelCls}>Work Directory</label>

@@ -60,6 +60,8 @@ struct ProxyState {
     gateway_provider: Option<String>,
     gateway_token: Option<String>,
     gateway_mode: Option<String>,
+    /// Path prefix to prepend when forwarding (e.g. "/anthropic" for DeepSeek).
+    gateway_path_prefix: Option<String>,
     ca: TapCa,
     client_config: Arc<ClientConfig>,
     seq: Arc<AtomicU64>,
@@ -98,6 +100,7 @@ pub fn start_session_proxy(
     gateway_provider: Option<String>,
     gateway_token: Option<String>,
     gateway_mode: Option<String>,
+    gateway_path_prefix: Option<String>,
 ) -> anyhow::Result<ProxyHandle> {
     ensure_crypto_provider();
     let ca = TapCa::load_or_create()?;
@@ -117,6 +120,7 @@ pub fn start_session_proxy(
         gateway_provider,
         gateway_token,
         gateway_mode,
+        gateway_path_prefix,
         ca,
         client_config,
         seq: Arc::new(AtomicU64::new(0)),
@@ -372,7 +376,8 @@ async fn forward(
         cli_upstream_hostname.clone()
     };
     let effective_port = cli_upstream_port;
-    let effective_url = format!("https://{effective_hostname}{path}");
+    let path_prefix = state.gateway_path_prefix.as_deref().unwrap_or("");
+    let effective_url = format!("https://{effective_hostname}{path_prefix}{path}");
 
     let builder = ExchangeBuilder {
         exchange_id: uuid::Uuid::new_v4().to_string(),

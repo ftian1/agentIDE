@@ -104,6 +104,7 @@ async fn run_tap_test(tap_mode: &str, upstream: Option<String>, timeout_secs: u6
         None, // gateway_provider
         None, // gateway_token
         None, // gateway_mode
+        None, // gateway_path_prefix
     )?;
 
     let proxy_label = upstream_proxy

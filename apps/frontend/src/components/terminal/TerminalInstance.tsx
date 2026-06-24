@@ -156,10 +156,8 @@ export function TerminalInstance({ sessionId, api, onReady, active = true }: Pro
     return () => observer.disconnect();
   }, [handleResize]);
 
-  // When the terminal becomes visible (e.g. switching to the raw tab), its
-  // container finally has real dimensions — refit and push the new size to the
-  // PTY so the agent CLI re-renders at the correct column count.
-  // Also focus the terminal so keyboard input works immediately.
+  // When the terminal becomes visible (e.g. switching to the raw tab), refit
+  // and push the new size to the PTY so the agent CLI re-renders correctly.
   useEffect(() => {
     if (!active) return;
     const id = requestAnimationFrame(() =>
@@ -171,7 +169,6 @@ export function TerminalInstance({ sessionId, api, onReady, active = true }: Pro
             term.options.fontFamily = `${ff} `;
             term.options.fontFamily = ff;
             term.clearTextureAtlas?.();
-            term.focus();
           }
           fitAddonRef.current?.fit();
           if (term) api.resize(sessionId, term.cols, term.rows);
@@ -181,10 +178,16 @@ export function TerminalInstance({ sessionId, api, onReady, active = true }: Pro
     return () => cancelAnimationFrame(id);
   }, [active, api, sessionId]);
 
+  // Explicit click handler to wrest focus to xterm.
+  const handleClick = useCallback(() => {
+    try { terminalRef.current?.focus(); } catch {}
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div
       ref={containerRef}
       className="h-full w-full"
+      onClick={handleClick}
     />
   );
 }
