@@ -1,4 +1,4 @@
-import { useState, useMemo, lazy, Suspense } from 'react';
+import { useState, useMemo, useEffect, lazy, Suspense } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { SecondarySidebar } from './components/layout/SecondarySidebar';
 import { ExplorerPanel } from './components/explorer/ExplorerPanel';
@@ -17,6 +17,7 @@ import { HttpTrafficPanel } from './components/bottom/HttpTrafficPanel';
 import { DebugView } from './components/debug/DebugView';
 import { useLayoutStore } from './stores/layoutStore';
 import { useWorkspaceView, useConnectionBootstrap } from './hooks/useWorkspaceView';
+import { log, logViewSwitch } from './lib/debugLog';
 
 /** Heavy components lazy-loaded — only fetched when actually needed. */
 const CodeChangesSidebar = lazy(() =>
@@ -165,6 +166,11 @@ export function App() {
   // Hide sidebar / agent panel / bottom panel so it gets the full viewport.
   const isDebugView = activeActivity === 'debug';
   const showChrome = !zenMode && !isDebugView;
+
+  // Log view switches for debugging
+  useEffect(() => {
+    logViewSwitch(isDebugView ? 'debug' : activeActivity);
+  }, [isDebugView, activeActivity]);
 
   const mainContent = useMemo(() => {
     if (isDebugView) {

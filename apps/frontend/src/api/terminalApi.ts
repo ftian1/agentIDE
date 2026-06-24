@@ -4,6 +4,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { SessionInfo, SpawnRequest } from './types';
+import { log, logSpawn, logWrite, logTerminalData } from '../lib/debugLog';
 
 export interface CodeChangeEvent {
   session_id: string;
@@ -61,18 +62,26 @@ export function createTerminalApi(): TerminalApi {
       cb(session_id, u8, seq);
     }
 
-    // Also buffer for late-arriving TerminalInstances
+    // Log every Nth terminal data event to avoid flooding.
+    if (seq % 50 === 0) {
+        logTerminalData(session_id, data.length, new TextDecoder().decode(new Uint8Array(data.slice(0, 80))));
+    }
+
+    // Also buffer for late-arriving TerminalInstances (last 500 events per session).
     let buf = dataBuffers.get(session_id);
     if (!buf) {
       buf = [];
       dataBuffers.set(session_id, buf);
     }
     buf.push({ data: u8, seq });
+    if (buf.length > 500) {
+      buf.splice(0, buf.length - 500);
+    }
   });
 
   return {
     async spawn(connectionId: string, req: SpawnRequest): Promise<SessionInfo> {
-      console.log(`[api] spawn: conn=${connectionId} tool=${req.tool} args=${JSON.stringify(req.args)} cwd=${req.cwd} container=${req.container}`);
+      logSpawn('(pending)', connectionId, req.tool, req.args ?? [], req.env ?? undefined);
       const info = await invoke<SessionInfo>('spawn_session', {
         connectionId,
         req: {
@@ -85,13 +94,13 @@ export function createTerminalApi(): TerminalApi {
           terminal_rows: 24,
         },
       });
-      console.log(`[api] spawn OK: session=${info.id} conn=${info.connectionId} tool=${info.tool} pid=${info.pid}`);
+      logSpawn(info.id, info.connectionId, info.tool, req.args ?? [], req.env ?? undefined);
       return info;
     },
 
     async write(sessionId: string, data: string): Promise<void> {
       const bytes = new TextEncoder().encode(data);
-      console.log(`[api] write: session=${sessionId} len=${bytes.length} preview=${JSON.stringify(data.slice(0, 20))}`);
+      logWrite(sessionId, data);
       await invoke('write_input', {
         connectionId: '',
         sessionId,

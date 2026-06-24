@@ -11,6 +11,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 
 import type { TerminalApi } from '../../api/terminalApi';
+import { log } from '../../lib/debugLog';
 
 interface Props {
   sessionId: string;
@@ -35,6 +36,8 @@ export function TerminalInstance({ sessionId, api, onReady, active = true }: Pro
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
+    log('system', `TerminalInstance: mount session=${sessionId.slice(0, 8)} active=${active}`);
 
     const fitAddon = new FitAddon();
 
@@ -119,9 +122,12 @@ export function TerminalInstance({ sessionId, api, onReady, active = true }: Pro
     // Forward user keystrokes to the backend
     const keyDispose = term.onData((input) => {
       api.write(sessionId, input).catch((e) => {
-        console.error(`[Terminal] write_input failed for ${sessionId}:`, e);
+        log('system', `Terminal: write_input FAILED session=${sessionId.slice(0, 8)} error=${e}`);
       });
     });
+
+    // Log cleanup
+    log('system', `TerminalInstance: init done session=${sessionId.slice(0, 8)}`);
 
     // Forward resize events
     const resizeDispose = term.onResize(({ cols, rows }) => {

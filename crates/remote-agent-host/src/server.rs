@@ -434,6 +434,10 @@ impl Server {
             }
         }
 
+        tracing::info!(%session_id, cmd = %command, args = ?exec_args, cwd = ?cwd, cols, rows,
+            env_anthropic = ?env.get("ANTHROPIC_BASE_URL"),
+            env_tap = ?env.get("__tap_enabled"),
+            "handle_spawn: launching CLI");
         let handles = match worker::spawn_cli(&command, &exec_args, &env, cwd.as_deref(), cols, rows) {
             Ok(h) => h,
             Err(e) => {
@@ -510,8 +514,12 @@ impl Server {
     }
 
     async fn handle_input(&self, session_id: &str, data: Vec<u8>) {
+        let preview = String::from_utf8_lossy(&data[..data.len().min(20)]);
         if let Some(session) = self.sessions.get(session_id) {
+            tracing::info!(%session_id, len = data.len(), %preview, "handle_input: writing to PTY");
             let _ = session.pty_op_tx.send(PtyOp::Write(data));
+        } else {
+            tracing::warn!(%session_id, %preview, "handle_input: session NOT FOUND");
         }
     }
 

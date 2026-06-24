@@ -13,6 +13,7 @@ import { TerminalInstance } from '../terminal/TerminalInstance';
 import { useTerminalApi } from '../../hooks/useTerminalApi';
 import { useLayoutStore } from '../../stores/layoutStore';
 import { useConnectionStore } from '../../stores/connectionStore';
+import { log } from '../../lib/debugLog';
 
 const MAX_AUTO_RETRIES = 10;
 
@@ -37,19 +38,19 @@ export function BottomTerminal() {
     null;
 
   const openShell = useCallback(async (manual = false) => {
-    if (!targetConnId) return;
+    if (!targetConnId) { log('system', 'BottomTerm: no targetConnId, skipping spawn'); return; }
     if (manual) retriesRef.current = 0;
     setSpawning(true);
     setError(null);
     try {
+      log('system', `BottomTerm: spawning bash on conn=${targetConnId} attempt=${retriesRef.current + 1}`);
       const info = await api.spawn(targetConnId, { tool: 'bash' });
+      log('system', `BottomTerm: bash spawned session=${info.id.slice(0, 8)}`);
       setSessionId(info.id);
       retriesRef.current = 0;
     } catch (e) {
-      // The backend may register the connection transport a beat after the
-      // frontend marks the connection "connected", so the very first auto-spawn
-      // can lose the race ("No agent connected"). Auto-retry with backoff
-      // instead of getting stuck — the user shouldn't have to click "重试".
+      const msg = e instanceof Error ? e.message : String(e);
+      log('system', `BottomTerm: spawn failed (attempt ${retriesRef.current + 1}/${MAX_AUTO_RETRIES}): ${msg}`);
       if (retriesRef.current < MAX_AUTO_RETRIES) {
         retriesRef.current += 1;
         const delay = 300 * retriesRef.current;
@@ -57,7 +58,7 @@ export function BottomTerminal() {
         setTimeout(() => { void openShell(); }, delay);
         return;
       }
-      setError(e instanceof Error ? e.message : String(e));
+      setError(msg);
     } finally {
       setSpawning(false);
     }
