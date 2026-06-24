@@ -162,10 +162,8 @@ export function App() {
     );
   }, [bottomPanelTab]);
 
-  // Debug view takes over the entire area right of the ActivityBar.
-  // Hide sidebar / agent panel / bottom panel so it gets the full viewport.
   const isDebugView = activeActivity === 'debug';
-  const showChrome = !zenMode && !isDebugView;
+  const showChrome = !zenMode;
 
   // Log view switches for debugging
   useEffect(() => {
@@ -173,9 +171,6 @@ export function App() {
   }, [isDebugView, activeActivity]);
 
   const mainContent = useMemo(() => {
-    if (isDebugView) {
-      return <DebugView />;
-    }
     switch (workspaceView.kind) {
       case 'diff':
         return (
@@ -218,7 +213,7 @@ export function App() {
             </SecondarySidebar>
           ) : undefined
         }
-        bottomPanelContent={isDebugView ? undefined : bottomContent}
+        bottomPanelContent={bottomContent}
         agentPanel={
           showChrome && agentPanelVisible ? (
             <AppShell.AgentColumn>
@@ -243,6 +238,19 @@ export function App() {
       >
         {mainContent}
       </AppShell>
+
+      {/* Debug overlay — covers entire viewport above AppShell without unmounting panels */}
+      {isDebugView && (
+        <div className="fixed inset-0 z-50 bg-bg-primary">
+          <div className="h-full w-full flex">
+            {/* Leave room for ActivityBar */}
+            <div className="w-12 flex-shrink-0 bg-bg-secondary border-r border-border" />
+            <div className="flex-1 overflow-hidden">
+              <DebugView />
+            </div>
+          </div>
+        </div>
+      )}
 
       {showConnectionDialog && (
         <Suspense fallback={null}>
