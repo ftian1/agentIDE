@@ -82,6 +82,20 @@ pub fn run() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
 
+            // ── Dev mode: load frontend from a remote Vite dev server ──
+            // Set REMOTE_AI_IDE_DEV_URL=http://<linux-ip>:1420 to skip rebuilding
+            // the exe on every frontend change. The dev server must be running on
+            // the Linux machine:  pnpm dev --host 0.0.0.0
+            if let Ok(dev_url) = std::env::var("REMOTE_AI_IDE_DEV_URL") {
+                eprintln!("[remote-ai-ide] DEV MODE: loading frontend from {dev_url}");
+                // Tauri re-exports the `url` crate.
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Ok(u) = dev_url.parse::<tauri::Url>() {
+                        let _ = window.navigate(u);
+                    }
+                }
+            }
+
             eprintln!("[remote-ai-ide] Setup running...");
 
             // Try IPC only on Linux (agent binary is always Linux).
