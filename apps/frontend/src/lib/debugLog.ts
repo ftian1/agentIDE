@@ -24,20 +24,25 @@ export function logSpawn(sessionId: string, connId: string, tool: string, args: 
   if (env) {
     for (const [k, v] of Object.entries(env)) {
       if (k.startsWith('ANTHROPIC_') || k.startsWith('OPENAI_') || k === 'TERM'
-          || k.startsWith('__tap') || k.startsWith('__gateway')) {
-        log('system', `  env: ${k}=${v}`);
+          || k.startsWith('__tap') || k.startsWith('__gateway') || k.startsWith('__providers')) {
+        const display = k.startsWith('__providers') ? `${v.slice(0, 80)}…` : v;
+        log('system', `  env: ${k}=${display}`);
       }
     }
   }
 }
 
-export function logWrite(sessionId: string, data: string) {
-  const preview = data.length <= 60 ? JSON.stringify(data) : JSON.stringify(data.slice(0, 40)) + '…';
-  log('system', `⌨ WRITE session=${sessionId.slice(0,8)} len=${data.length} data=${preview}`);
+export function logWrite(_sessionId: string, _data: string) {
+  // Terminal I/O is too noisy for the default log level.
+  // Enable by uncommenting if debugging terminal issues:
+  // const preview = _data.length <= 60 ? JSON.stringify(_data) : JSON.stringify(_data.slice(0, 40)) + '…';
+  // log('system', `⌨ WRITE session=${_sessionId.slice(0,8)} len=${_data.length} data=${preview}`);
 }
 
-export function logTerminalData(sessionId: string, len: number, preview: string) {
-  log('system', `◀ DATA session=${sessionId.slice(0,8)} len=${len} preview=${preview.slice(0, 60)}`);
+export function logTerminalData(_sessionId: string, _len: number, _preview: string) {
+  // Terminal output is too noisy for the default log level.
+  // Enable by uncommenting if debugging terminal issues:
+  // log('system', `◀ DATA session=${_sessionId.slice(0,8)} len=${_len} preview=${_preview.slice(0, 60)}`);
 }
 
 export function logViewSwitch(view: string) {

@@ -12,15 +12,10 @@ import { listen } from '@tauri-apps/api/event';
 import { useConnectionStore } from '../../stores/connectionStore';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useLayoutStore } from '../../stores/layoutStore';
-import { useAgentEngineStore } from '../../stores/agentEngineStore';
+import { useAgentEngineStore, type AgentKind, AGENT_LABELS as AGENT_KIND_LABELS } from '../../stores/agentEngineStore';
+import { useLlmProviderStore } from '../../stores/llmProviderStore';
+import { buildSpawnEnv } from '../../lib/spawnEnv';
 import type { ConnectionConfig } from '../../api/types';
-
-type AgentTool = 'claude' | 'copilot';
-
-const AGENT_LABELS: Record<AgentTool, string> = {
-  claude: 'Claude Code CLI',
-  copilot: 'GitHub Copilot CLI',
-};
 
 /** In-memory cache of last-used credentials (survives page nav but not app restart). */
 type CredentialCache = Map<string, ConnectionConfig>;
@@ -62,12 +57,6 @@ export function AgentManagerPanel() {
     }
   }, []);
 
-  /** Navigate to connect form with pre-filled fields, optionally highlighting password. */
-  const handleReconnectFallback = useCallback((host: string, port: number, user: string) => {
-    setPrefill({ host, port, user, highlightPwd: true });
-    setView('connect');
-  }, []);
-
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
@@ -103,7 +92,6 @@ export function AgentManagerPanel() {
         <OverviewView
           onAddAgent={() => setOpenModal('agentEngine')}
           onConnect={() => { setPrefill(null); setView('connect'); }}
-          onReconnectFallback={handleReconnectFallback}
           credentialsRef={credentialsRef}
         />
       ) : (
@@ -122,12 +110,10 @@ export function AgentManagerPanel() {
 function OverviewView({
   onAddAgent,
   onConnect,
-  onReconnectFallback,
   credentialsRef,
 }: {
   onAddAgent: () => void;
   onConnect: () => void;
-  onReconnectFallback: (host: string, port: number, user: string) => void;
   credentialsRef: React.MutableRefObject<CredentialCache>;
 }) {
   const connections = useConnectionStore((s) => s.connections);
@@ -210,10 +196,9 @@ function OverviewView({
                   sessions={machineSessions}
                   savedPassword={savedConfig?.password ?? loadPassword(m.host, m.port, m.user)}
                   savedAuthMethod={savedConfig?.authMethod ?? 'password'}
-                  savedAgentTool={(savedConfig as any)?.agentTool as AgentTool | undefined}
+                  savedAgentTool={(savedConfig as any)?.agentTool as AgentKind | undefined}
                   savedCliArgs={(savedConfig as any)?.cliArgs as string | undefined}
                   credentialsRef={credentialsRef}
-                  onReconnectFallback={onReconnectFallback}
                 />
               );
             })}
@@ -228,7 +213,7 @@ function OverviewView({
 function MachineCard({
   host, port, user, label, connectionId, status, sessions,
   savedPassword, savedAuthMethod, savedAgentTool, savedCliArgs,
-  credentialsRef, onReconnectFallback,
+  credentialsRef,
 }: {
   host: string;
   port: number;
@@ -239,10 +224,9 @@ function MachineCard({
   sessions: Array<{ id: string; tool: string; state: string; pid?: number }>;
   savedPassword?: string | null;
   savedAuthMethod: string;
-  savedAgentTool?: AgentTool;
+  savedAgentTool?: AgentKind;
   savedCliArgs?: string;
   credentialsRef: React.MutableRefObject<CredentialCache>;
-  onReconnectFallback: (host: string, port: number, user: string) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
   const [reconnecting, setReconnecting] = useState(false);
@@ -263,7 +247,17 @@ function MachineCard({
   const closeSession = useSessionStore((s) => s.close);
   const setOpenModal = useLayoutStore((s) => s.setOpenModal);
   const setLastConn = useAgentEngineStore((s) => s.setLastConn);
+  const agentConfigs = useAgentEngineStore((s) => s.configs);
+  const llmProviders = useLlmProviderStore((s) => s.providers);
+  const activeModel = useLlmProviderStore((s) => s.activeModel);
+  const llmLoaded = useLlmProviderStore((s) => s.loaded);
+  const llmLoad = useLlmProviderStore((s) => s.load);
   const bottomSessionId = useLayoutStore((s) => s.bottomPanelSessionId);
+
+  // Ensure LLM providers are loaded (needed for __providers_json in spawn env).
+  useEffect(() => {
+    if (!llmLoaded) llmLoad();
+  }, [llmLoaded, llmLoad]);
 
   const [deleteCountdown, setDeleteCountdown] = useState(0);
   const isConnected = status === 'connected' || status === 'bootstrapping';
@@ -300,8 +294,9 @@ function MachineCard({
 
   const handleReconnect = useCallback(async () => {
     if (!savedPassword && savedAuthMethod === 'password') {
-      // Navigate to connect form with pre-filled fields
-      onReconnectFallback(host, port, user);
+      // Open Agent Engine Settings modal with pre-filled connection info
+      setLastConn({ host, port, user, authMethod: 'password' });
+      setOpenModal('agentEngine');
       return;
     }
 
@@ -352,22 +347,28 @@ function MachineCard({
         new Promise<void>((_, reject) => setTimeout(() => reject(new Error('Bootstrap timeout')), 120000)),
       ]).catch(() => {});
 
-      // Start agent CLI
-      const tool = savedAgentTool ?? 'claude';
+      // Build env using shared logic — includes model vars, auth key, __providers_json.
+      const tool = (savedAgentTool as AgentKind) ?? 'claude';
+      const cfg = agentConfigs[tool] ?? { authKey: '', workDir: '', argPresets: [], extraArgs: '', envModels: {}, extraEnv: [] };
+      const spawnEnv = buildSpawnEnv(tool, cfg, llmProviders, activeModel?.modelId);
+      // Merge TMPDIR for the remote user.
+      spawnEnv.TMPDIR = `/home/${user}/tmp`;
+      spawnEnv.TMP = `/home/${user}/tmp`;
+      spawnEnv.TEMP = `/home/${user}/tmp`;
       const args = (savedCliArgs ?? '').split(' ').filter(Boolean);
-      appendLog(`Starting ${AGENT_LABELS[tool]}...`);
+      appendLog(`Starting ${AGENT_KIND_LABELS[tool] ?? tool}...`);
       const session = await spawn(connInfo.id, {
         tool,
         args,
         cwd: undefined,
-        env: { TMPDIR: `/home/${user}/tmp`, TMP: `/home/${user}/tmp`, TEMP: `/home/${user}/tmp` },
+        env: Object.keys(spawnEnv).length > 0 ? spawnEnv : undefined,
       });
       appendLog(`✓ Agent started — session ${session.id.slice(0, 8)}`);
 
       setTimeout(() => {
-        setReconnectLog([]);
         setReconnecting(false);
-      }, 3000);
+        // Keep the log visible — don't clear it.
+      }, 1000);
     } catch (e) {
       const msg = String(e);
       appendLog(`✕ Error: ${msg}`);
@@ -589,8 +590,8 @@ function ConnectView({
   const [port, setPort] = useState(() => (prefill?.port ?? Number(localStorage.getItem('agentMgr:port'))) || 22);
   const [user, setUser] = useState(() => (prefill?.user ?? localStorage.getItem('agentMgr:user')) ?? 'root');
   const [password, setPassword] = useState('');
-  const [agentTool, setAgentTool] = useState<AgentTool>(
-    () => (localStorage.getItem('agentMgr:agentTool') as AgentTool) ?? 'claude',
+  const [agentTool, setAgentTool] = useState<AgentKind>(
+    () => (localStorage.getItem('agentMgr:agentTool') as AgentKind) ?? 'claude',
   );
   const [useContainer, setUseContainer] = useState(
     () => localStorage.getItem('agentMgr:useContainer') === 'true',
@@ -613,6 +614,15 @@ function ConnectView({
 
   const connect = useConnectionStore((s) => s.connect);
   const spawn = useSessionStore((s) => s.spawn);
+  const agentConfigs = useAgentEngineStore((s) => s.configs);
+  const llmProviders = useLlmProviderStore((s) => s.providers);
+  const activeModel = useLlmProviderStore((s) => s.activeModel);
+  const llmLoaded = useLlmProviderStore((s) => s.loaded);
+  const llmLoad = useLlmProviderStore((s) => s.load);
+
+  useEffect(() => {
+    if (!llmLoaded) llmLoad();
+  }, [llmLoaded, llmLoad]);
 
   const appendLog = useCallback((msg: string) => {
     setLog((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
@@ -678,21 +688,26 @@ function ConnectView({
       await Promise.race([connIdPromise, timeout]).catch(() => {});
 
       if (useContainer && containerName) {
-        appendLog(`Starting ${AGENT_LABELS[agentTool]} in container ${containerName}...`);
+        appendLog(`Starting ${AGENT_KIND_LABELS[agentTool] ?? agentTool} in container ${containerName}...`);
       } else {
-        appendLog(`Starting ${AGENT_LABELS[agentTool]}...`);
+        appendLog(`Starting ${AGENT_KIND_LABELS[agentTool] ?? agentTool}...`);
       }
+      const cfg = agentConfigs[agentTool] ?? { authKey: '', workDir: '', argPresets: [], extraArgs: '', envModels: {}, extraEnv: [] };
+      const spawnEnv = buildSpawnEnv(agentTool, cfg, llmProviders, activeModel?.modelId);
+      spawnEnv.TMPDIR = `/home/${user}/tmp`;
+      spawnEnv.TMP = `/home/${user}/tmp`;
+      spawnEnv.TEMP = `/home/${user}/tmp`;
       const session = await spawn(connInfo.id, {
         tool: agentTool,
         args: cliArgs.split(' ').filter(Boolean),
         cwd: undefined,
-        env: { TMPDIR: `/home/${user}/tmp`, TMP: `/home/${user}/tmp`, TEMP: `/home/${user}/tmp` },
+        env: Object.keys(spawnEnv).length > 0 ? spawnEnv : undefined,
         container: useContainer && containerName ? containerName : undefined,
       });
       appendLog(`Agent started — session ${session.id.slice(0, 8)}...`);
 
       appendLog('✓ Agent connected successfully!');
-      onSuccess(`Agent ${AGENT_LABELS[agentTool]} connected to ${host}`);
+      onSuccess(`Agent ${AGENT_KIND_LABELS[agentTool] ?? agentTool} connected to ${host}`);
     } catch (e) {
       const msg = String(e);
       appendLog(`✕ Error: ${msg}`);
@@ -759,7 +774,7 @@ function ConnectView({
         <div>
           <label className="text-[10px] text-text-secondary block mb-1 uppercase tracking-wider">Agent CLI</label>
           <div className="flex gap-2">
-            {(Object.entries(AGENT_LABELS) as [AgentTool, string][]).map(([tool, label]) => (
+            {(Object.entries(AGENT_KIND_LABELS) as [AgentKind, string][]).map(([tool, label]) => (
               <button key={tool} onClick={() => setAgentTool(tool)}
                 className={`flex-1 px-3 py-1.5 text-xs rounded border transition-colors ${
                   agentTool === tool ? 'border-accent bg-accent/20 text-text-primary' : 'border-border bg-bg-tertiary text-text-secondary hover:text-text-primary'

@@ -8,7 +8,7 @@ pub mod record;
 
 use std::collections::HashMap;
 
-use shared_protocol::types::{TapMode, ToolKind};
+use shared_protocol::types::{ProviderConfig, TapMode, ToolKind};
 
 /// Env keys used to configure the tap (set by the desktop, stripped before spawn).
 pub const ENV_ENABLED: &str = "__tap_enabled";
@@ -18,6 +18,9 @@ pub const ENV_MODE: &str = "__tap_mode";
 pub const ENV_GW_PROVIDER: &str = "__gateway_provider";
 pub const ENV_GW_TOKEN: &str = "__gateway_token";
 pub const ENV_GW_MODE: &str = "__gateway_mode";
+
+/// Provider configs in JSON (model-based routing), set by the frontend.
+pub const ENV_PROVIDERS_JSON: &str = "__providers_json";
 
 /// Claude-CLI-only: set to dummy so it doesn't block on /login prompt
 /// when ANTHROPIC_BASE_URL points to a non-Anthropic endpoint.
@@ -32,6 +35,8 @@ pub struct TapConfig {
     pub gateway_token: Option<String>,
     /// "passthrough" (forward as-is + auth) or "translate" (Anthropic↔OpenAI).
     pub gateway_mode: Option<String>,
+    /// Provider configs for model-based routing (parsed from __providers_json).
+    pub providers: Vec<ProviderConfig>,
 }
 
 impl TapConfig {
@@ -41,14 +46,35 @@ impl TapConfig {
             .remove(ENV_ENABLED)
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-        let mode = match env.remove(ENV_MODE).as_deref() {
-            Some("reverse") => TapMode::Reverse,
-            _ => TapMode::Mitm,
-        };
+        let explicit_mode = env.remove(ENV_MODE);
         let gateway_provider = env.remove(ENV_GW_PROVIDER).filter(|v| !v.is_empty());
         let gateway_token = env.remove(ENV_GW_TOKEN).filter(|v| !v.is_empty());
         let gateway_mode = env.remove(ENV_GW_MODE).or_else(|| Some("passthrough".into()));
-        TapConfig { enabled, mode, gateway_provider, gateway_token, gateway_mode }
+
+        // Parse __providers_json for model-based routing.
+        let providers_json = env.remove(ENV_PROVIDERS_JSON).filter(|v| !v.is_empty());
+        let providers: Vec<ProviderConfig> = providers_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<Vec<ProviderConfig>>(json).ok())
+            .unwrap_or_default();
+        let has_providers = !providers.is_empty();
+
+        // When a third-party gateway is configured, default to Reverse mode
+        // so that ANTHROPIC_BASE_URL is injected and the CLI routes through
+        // our local proxy (which prepends the gateway path prefix, e.g. /anthropic).
+        // Providers also default to Reverse mode for model-based routing.
+        let mode = if gateway_provider.is_some() || gateway_token.is_some() || has_providers {
+            match explicit_mode.as_deref() {
+                Some("mitm") => TapMode::Mitm,
+                _ => TapMode::Reverse,  // default for gateway / providers
+            }
+        } else {
+            match explicit_mode.as_deref() {
+                Some("reverse") => TapMode::Reverse,
+                _ => TapMode::Mitm,     // default for plain tap (no gateway)
+            }
+        };
+        TapConfig { enabled: enabled || gateway_token.is_some() || has_providers, mode, gateway_provider, gateway_token, gateway_mode, providers }
     }
 }
 
@@ -63,6 +89,37 @@ pub fn reverse_upstream_for(tool: &ToolKind) -> &'static str {
     match tool {
         ToolKind::Claude => "api.anthropic.com",
         _ => "api.githubcopilot.com",
+    }
+}
+
+/// Extract host:port from a provider's base URL.
+/// E.g., "https://api.deepseek.com/v1" → Some(("api.deepseek.com", 443))
+pub fn provider_upstream_host(base_url: &str) -> Option<(String, u16)> {
+    let without_scheme = base_url
+        .strip_prefix("https://")
+        .or_else(|| base_url.strip_prefix("http://"))?;
+    let host_part = without_scheme.split('/').next()?;
+    let (host, port) = if let Some((h, p)) = host_part.rsplit_once(':') {
+        (h.to_string(), p.parse::<u16>().unwrap_or(443))
+    } else {
+        (
+            host_part.to_string(),
+            if base_url.starts_with("https://") {
+                443
+            } else {
+                80
+            },
+        )
+    };
+    Some((host, port))
+}
+
+/// Path prefix for Anthropic-compatible API endpoints on non-Anthropic providers.
+/// E.g., DeepSeek's Anthropic endpoint is at /anthropic, not the root.
+pub fn provider_path_prefix(provider_kind: &str) -> Option<&'static str> {
+    match provider_kind {
+        "deepseek" => Some("/anthropic"),
+        _ => None,
     }
 }
 
@@ -120,7 +177,20 @@ mod tests {
 }
 
 /// Build the env vars to inject so the CLI routes through the tap proxy.
-pub fn proxy_env(mode: &TapMode, port: u16, ca_pem_path: &std::path::Path) -> Vec<(String, String)> {
+///
+/// In **Reverse** mode the CLI base URL is redirected to
+/// `http://127.0.0.1:{port}` and a dummy auth value is set so the CLI does
+/// NOT block on /login or credential checks.  The proxy injects the real
+/// credentials + upstream URL per-request based on model-id matching.
+///
+/// Only the env vars relevant to the specific `tool` are set — we no longer
+/// flood every CLI with unrelated vars.
+pub fn proxy_env(
+    mode: &TapMode,
+    port: u16,
+    ca_pem_path: &std::path::Path,
+    tool: &ToolKind,
+) -> Vec<(String, String)> {
     let endpoint = format!("http://127.0.0.1:{port}");
     match mode {
         TapMode::Mitm => {
@@ -133,24 +203,56 @@ pub fn proxy_env(mode: &TapMode, port: u16, ca_pem_path: &std::path::Path) -> Ve
                 ("ALL_PROXY".into(), endpoint.clone()),
                 ("all_proxy".into(), endpoint),
                 ("NODE_EXTRA_CA_CERTS".into(), ca.clone()),
-                // Some tools honor these instead of NODE_EXTRA_CA_CERTS.
                 ("REQUESTS_CA_BUNDLE".into(), ca.clone()),
                 ("SSL_CERT_FILE".into(), ca),
-                // Don't bypass the proxy for localhost-style hosts.
                 ("NO_PROXY".into(), String::new()),
                 ("no_proxy".into(), String::new()),
             ]
         }
-        TapMode::Reverse => {
-            // The CLI talks plain HTTP to us; we forward to the real upstream.
-            // ANTHROPIC_AUTH_TOKEN=dummy prevents Claude CLI from blocking on /login
-            // when the base URL points to a non-Anthropic endpoint.
-            vec![
-                ("ANTHROPIC_BASE_URL".into(), endpoint.clone()),
-                (ANTHROPIC_AUTH_TOKEN.into(), "dummy".into()),
-                ("OPENAI_BASE_URL".into(), endpoint.clone()),
-                ("OPENAI_API_BASE".into(), endpoint),
-            ]
+        TapMode::Reverse => reverse_vars(tool, &endpoint),
+    }
+}
+
+/// Per-tool env vars for Reverse mode.  Only sets what the specific CLI needs.
+fn reverse_vars(tool: &ToolKind, endpoint: &str) -> Vec<(String, String)> {
+    match tool {
+        // ── Claude Code ──────────────────────────────────────────
+        // Only ANTHROPIC_AUTH_TOKEN=dummy is needed; Claude Code
+        // uses this (not ANTHROPIC_API_KEY) when BASE_URL points
+        // to a non-Anthropic endpoint, skipping the /login prompt.
+        // ANTHROPIC_API_KEY is only set in passthrough mode (by the
+        // frontend) when the user provides their own API key.
+        ToolKind::Claude => vec![
+            ("ANTHROPIC_BASE_URL".into(), endpoint.into()),
+            (ANTHROPIC_AUTH_TOKEN.into(), "dummy".into()),
+        ],
+
+        // ── GitHub Copilot CLI ───────────────────────────────────
+        ToolKind::Copilot => vec![
+            ("COPILOT_PROVIDER_BASE_URL".into(), endpoint.into()),
+            ("COPILOT_PROVIDER_API_KEY".into(), "dummy".into()),
+            ("COPILOT_PROVIDER_TYPE".into(), "openai".into()),
+            ("COPILOT_OFFLINE".into(), "true".into()),
+        ],
+
+        // ── Custom / third-party CLIs ────────────────────────────
+        // Most of these speak OpenAI-compatible HTTP (OpenCode, Codex,
+        // Hermes with OpenAI backends, etc.), so default to
+        // OPENAI_BASE_URL + OPENAI_API_KEY=dummy.  Gemini is an
+        // exception: it reads GEMINI_API_KEY and may not support
+        // OPENAI_BASE_URL override.
+        ToolKind::Custom(name) => {
+            let name = name.as_str();
+            if name.eq_ignore_ascii_case("gemini") {
+                vec![("GEMINI_API_KEY".into(), "dummy".into())]
+            } else {
+                // opencode / codex / hermes / … — OpenAI-compatible
+                vec![
+                    ("OPENAI_BASE_URL".into(), endpoint.into()),
+                    ("OPENAI_API_BASE".into(), endpoint.into()),
+                    ("OPENAI_API_KEY".into(), "dummy".into()),
+                ]
+            }
         }
     }
 }

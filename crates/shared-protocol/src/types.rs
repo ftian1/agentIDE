@@ -154,6 +154,23 @@ pub struct SessionSummary {
     pub turn_count: u64,
 }
 
+/// Configuration for a third-party LLM provider, passed from the frontend
+/// to the remote proxy so it can route requests by model_id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderConfig {
+    pub id: String,
+    pub kind: String, // "copilot" | "deepseek" | "openai-compatible" | "ollama" | "openrouter" | "groq" | "gemini"
+    pub label: String,
+    pub base_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copilot_token: Option<String>,
+    /// Model IDs that belong to this provider (e.g. ["deepseek-chat", "deepseek-reasoner"])
+    pub model_ids: Vec<String>,
+}
+
 /// Information about the remote Linux host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteHostInfo {

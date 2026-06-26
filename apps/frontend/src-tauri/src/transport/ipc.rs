@@ -44,8 +44,15 @@ impl IpcTransport {
         let binary_path = Self::find_agent_binary()?;
         tracing::info!(path = %binary_path.display(), "Starting agent via IPC");
 
+        // Build a default log path so the agent always writes to a file,
+        // matching the SSH bootstrap behaviour (uploader.rs start_agent).
+        let agent_log = std::env::var("HOME")
+            .map(|h| format!("{}/.remote-agent-host/agent.log", h.trim_end_matches('/')))
+            .unwrap_or_else(|_| "/tmp/remote-agent-host-agent.log".to_string());
         let mut child = Command::new(&binary_path)
             .arg("--mode").arg("stdio")
+            .arg("--log-level").arg("debug")
+            .arg("--log-file").arg(&agent_log)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

@@ -54,30 +54,50 @@ pub async fn run_bootstrap(
         .ok_or_else(|| anyhow::anyhow!("Unsupported architecture: {}", arch))?;
     let embedded_hash = binary.sha256_hex();
 
+    // Show full hashes in BOTH the bootstrap progress UI AND the agent output.
+    let exe_hash_msg = format!("[bootstrap] Exe embedded  SHA256: {}", embedded_hash);
+    let remote_hash_msg = format!("[bootstrap] Remote agent SHA256: {}", info.agent_sha256);
+    emit("detecting", 0.3, &exe_hash_msg, None);
+    emit("detecting", 0.3, &remote_hash_msg, None);
+    crate::backend_log!(app_handle, "{}", exe_hash_msg);
+    crate::backend_log!(app_handle, "{}", remote_hash_msg);
+
     let need_upload = if info.agent_sha256.is_empty() {
-        tracing::info!("Agent not installed on remote, uploading");
+        tracing::info!(embedded_sha256 = %embedded_hash, "Agent not installed on remote, uploading");
+        let msg = "[bootstrap] Agent not on remote, will upload".to_string();
+        emit("uploading", 0.4, &msg, None);
+        crate::backend_log!(app_handle, "{}", msg);
         true
     } else if info.agent_sha256 == embedded_hash {
-        tracing::info!(remote_sha256 = %&info.agent_sha256[..16], embedded_sha256 = %&embedded_hash[..16], "Agent SHA256 matches, skipping upload");
+        tracing::info!(remote = %info.agent_sha256, embedded = %embedded_hash, "Agent SHA256 matches, skipping upload");
+        let msg = format!("[bootstrap] SHA256 match — skip upload ({})", &embedded_hash[..16]);
+        emit("uploading", 0.6, &msg, None);
+        crate::backend_log!(app_handle, "{}", msg);
         false
     } else {
-        tracing::info!(remote_sha256 = %&info.agent_sha256[..16], embedded_sha256 = %&embedded_hash[..16], "Agent SHA256 mismatch, re-uploading");
+        tracing::warn!(remote = %info.agent_sha256, embedded = %embedded_hash, "Agent SHA256 MISMATCH, re-uploading");
+        let msg = format!("[bootstrap] SHA256 MISMATCH! exe={} remote={} — re-uploading", &embedded_hash[..16], &info.agent_sha256[..16]);
+        emit("uploading", 0.4, &msg, None);
+        crate::backend_log!(app_handle, "{}", msg);
         true
     };
 
     if need_upload {
-        emit("uploading", 0.4, "Preparing agent binary...", None);
+        let msg1 = format!("[bootstrap] Uploading agent ({:.1} KB)...", binary.data.len() as f64 / 1024.0);
+        emit("uploading", 0.5, &msg1, None);
+        crate::backend_log!(app_handle, "{}", msg1);
 
-        emit("uploading", 0.6, &format!("Uploading agent ({:.1} KB, sha256={}...)...", binary.data.len() as f64 / 1024.0, &embedded_hash[..16]), None);
         uploader::upload_agent(session, &binary, &info.home_dir).await
             .map_err(|e| {
-                emit("uploading", 0.6, "Upload failed", Some(e.to_string()));
+                let err_msg = format!("[bootstrap] Upload FAILED: {}", e);
+                emit("uploading", 0.6, &err_msg, Some(e.to_string()));
+                crate::backend_log!(app_handle, "{}", err_msg);
                 e
             })?;
 
-        emit("uploading", 0.8, "Agent binary installed", None);
-    } else {
-        emit("uploading", 0.8, "Agent already installed, skipping upload", None);
+        let done_msg = "[bootstrap] Agent binary installed".to_string();
+        emit("uploading", 0.8, &done_msg, None);
+        crate::backend_log!(app_handle, "{}", done_msg);
     }
 
     // Step 3: Start the agent (use absolute path from detection)

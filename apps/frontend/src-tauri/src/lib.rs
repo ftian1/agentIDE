@@ -57,12 +57,58 @@ impl std::io::Write for DebugWriter {
     }
 }
 
+/// Log to BOTH stderr AND the log file.  On Windows GUI stderr goes to
+/// /dev/null, so the file is the only place you'll see the message.
+/// Usage: `log!(&log_path, "msg {}", arg);`
+macro_rules! log_msg {
+    ($path:expr, $($arg:tt)*) => {{
+        use std::io::Write;
+        let msg = format!($($arg)*);
+        let _ = std::io::stderr().write_all(msg.as_bytes());
+        let _ = std::io::stderr().write_all(b"\n");
+        let _ = std::io::stderr().flush();
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open($path)
+        {
+            let _ = writeln!(f, "{msg}");
+            let _ = f.flush();
+        }
+    }};
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let log_path = std::env::temp_dir().join("remote-ai-ide.log");
+    let log_path_str = log_path.to_string_lossy().to_string();
+
+    // ── Panic hook: log panics before the process exits ──
+    let log_path_panic = log_path.clone();
+    std::panic::set_hook(Box::new(move |info| {
+        use std::io::Write;
+        let msg = format!(
+            "[remote-ai-ide] PANIC: {} | location: {:?}",
+            info,
+            info.location()
+        );
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path_panic)
+        {
+            let _ = writeln!(f, "{msg}");
+            let _ = f.flush();
+        }
+        let _ = std::io::stderr().write_all(msg.as_bytes());
+        let _ = std::io::stderr().write_all(b"\n");
+    }));
+
     let log_file = std::fs::File::create(&log_path)
         .expect("Failed to create log file");
-    // Write to BOTH stderr (console) and file
+    log_msg!(&log_path_str, "[remote-ai-ide] Log file: {}", log_path_str);
+
+    // Set up tracing subscriber (writes to stderr + file via DebugWriter)
     let writer = DebugWriter { file: std::sync::Mutex::new(log_file) };
     tracing_subscriber::fmt()
         .with_writer(std::sync::Mutex::new(writer))
@@ -74,74 +120,92 @@ pub fn run() {
         .with_ansi(false)
         .init();
 
-    // Also write a marker so we know the code runs
-    eprintln!("[remote-ai-ide] Backend starting...");
+    log_msg!(&log_path_str, "[remote-ai-ide] Backend starting (pid={})", std::process::id());
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+    // Log env vars for debug
+    match std::env::var("REMOTE_AI_IDE_DEV_URL") {
+        Ok(url) => log_msg!(&log_path_str, "[remote-ai-ide] REMOTE_AI_IDE_DEV_URL={url}"),
+        Err(_) => log_msg!(&log_path_str, "[remote-ai-ide] REMOTE_AI_IDE_DEV_URL not set"),
+    }
+
+    log_msg!(&log_path_str, "[remote-ai-ide] Building Tauri app...");
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init());
+    log_msg!(&log_path_str, "[remote-ai-ide] Tauri builder created, adding setup + invoke_handler...");
+
+    let log_path_clone = log_path_str.clone();
+    builder
         .setup(move |app| {
             let app_handle = app.handle().clone();
+            log_msg!(&log_path_clone, "[remote-ai-ide] >>> setup closure entered <<<");
 
-            // ── Dev mode: recreate main window with remote Vite dev server ──
-            // Set REMOTE_AI_IDE_DEV_URL=http://<linux-ip>:1420 to skip rebuilding
-            // the exe on every frontend change. The dev server must be running on
-            // the Linux machine:  pnpm dev --host 0.0.0.0
-            if let Ok(dev_url) = std::env::var("REMOTE_AI_IDE_DEV_URL") {
-                eprintln!("[remote-ai-ide] DEV MODE: loading frontend from {dev_url}");
-                use tauri::WebviewUrl;
-                use tauri::WebviewWindowBuilder;
-                // Close the embedded-frontend window that Tauri auto-created.
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.close();
-                }
-                // Open a fresh window pointing at the dev server.  Because the
-                // window is born with the dev-server origin, Tauri's IPC bridge
-                // permits `invoke()` calls — unlike `window.navigate()` which
-                // changes the origin post-creation and triggers the ACL block.
+            // ── Create main window: dev server or embedded frontend ──
+            // Set REMOTE_AI_IDE_DEV_URL=http://<linux-ip>:1420 to load the
+            // frontend from a remote Vite dev server instead of the bundled dist.
+            use tauri::WebviewUrl;
+            use tauri::WebviewWindowBuilder;
+
+            let window_result = if let Ok(dev_url) = std::env::var("REMOTE_AI_IDE_DEV_URL") {
+                log_msg!(&log_path_clone, "[remote-ai-ide] DEV MODE: loading frontend from {dev_url}");
                 if let Ok(u) = dev_url.parse::<tauri::Url>() {
-                    let _ = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(u))
+                    WebviewWindowBuilder::new(app, "main", WebviewUrl::External(u))
                         .title("Remote AI IDE [DEV]")
                         .inner_size(1600.0, 1000.0)
                         .min_inner_size(900.0, 600.0)
                         .resizable(true)
                         .maximized(true)
                         .visible(true)
-                        .build();
+                        .build()
+                        .map_err(|e| format!("{e}"))
+                } else {
+                    Err(format!("failed to parse dev URL: {dev_url}"))
                 }
+            } else {
+                log_msg!(&log_path_clone, "[remote-ai-ide] Using embedded frontend");
+                WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+                    .title("Remote AI IDE")
+                    .inner_size(1600.0, 1000.0)
+                    .min_inner_size(900.0, 600.0)
+                    .resizable(true)
+                    .maximized(true)
+                    .visible(true)
+                    .build()
+                    .map_err(|e| format!("{e}"))
+            };
+
+            match &window_result {
+                Ok(_) => log_msg!(&log_path_clone, "[remote-ai-ide] Main window created successfully"),
+                Err(e) => log_msg!(&log_path_clone, "[remote-ai-ide] FAILED to create main window: {e}"),
             }
 
-            eprintln!("[remote-ai-ide] Setup running...");
-
-            // Try IPC only on Linux (agent binary is always Linux).
-            // On Windows/macOS, the agent runs on the remote host.
-            eprintln!("[remote-ai-ide] Step 1: checking agent transport...");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 1: checking agent transport...");
             let agent_transport: Option<Arc<dyn transport::Transport>> =
                 if cfg!(target_os = "linux") {
                     match transport::ipc::IpcTransport::spawn() {
                         Ok(t) => {
-                            eprintln!("[remote-ai-ide] Local agent started via IPC ✓");
+                            log_msg!(&log_path_clone, "[remote-ai-ide] Local agent started via IPC OK");
                             Some(Arc::new(t))
                         }
                         Err(e) => {
-                            eprintln!("[remote-ai-ide] Local agent not available: {e}");
+                            log_msg!(&log_path_clone, "[remote-ai-ide] Local agent not available: {e}");
                             None
                         }
                     }
                 } else {
-                    eprintln!("[remote-ai-ide] Non-Linux host — agent runs on remote machine");
+                    log_msg!(&log_path_clone, "[remote-ai-ide] Non-Linux host — agent runs on remote machine");
                     None
                 };
 
-            eprintln!("[remote-ai-ide] Step 2: creating connection manager...");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 2: creating connection manager...");
             let connections = connection::manager::ConnectionManager::new(app_handle.clone());
-            eprintln!("[remote-ai-ide] Step 2 done");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 2 done");
 
-            eprintln!("[remote-ai-ide] Step 3: opening database...");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 3: opening database...");
             let db = store::Database::open().expect("Failed to open database");
-            eprintln!("[remote-ai-ide] Step 3 done");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 3 done");
 
             // Restore persisted connections from DB into memory
-            eprintln!("[remote-ai-ide] Step 3.5: loading persisted connections...");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 3.5: loading persisted connections...");
             match db.load_connections() {
                 Ok(records) => {
                     for rec in &records {
@@ -153,10 +217,10 @@ pub fn run() {
                             rec.user.clone(),
                         );
                     }
-                    eprintln!("[remote-ai-ide] Loaded {} persisted connection(s)", records.len());
+                    log_msg!(&log_path_clone, "[remote-ai-ide] Loaded {} persisted connection(s)", records.len());
                 }
                 Err(e) => {
-                    eprintln!("[remote-ai-ide] Warning: failed to load persisted connections: {e}");
+                    log_msg!(&log_path_clone, "[remote-ai-ide] Warning: failed to load persisted connections: {e}");
                 }
             }
 
@@ -172,7 +236,7 @@ pub fn run() {
             };
 
             app.manage(state);
-            eprintln!("[remote-ai-ide] Step 4: state managed");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 4: state managed");
 
             // For the local IPC agent (Linux), run the same per-connection demux
             // relay so its recv() stream is owned and acks/output are fanned out.
@@ -182,7 +246,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     commands::session::connection_demux_relay(t, handle, "local".to_string()).await;
                 });
-                eprintln!("[remote-ai-ide] Step 5: local agent demux relay spawned");
+                log_msg!(&log_path_clone, "[remote-ai-ide] Step 5: local agent demux relay spawned");
             }
 
             // Log WebView lifecycle for debugging renderer crashes
@@ -201,7 +265,7 @@ pub fn run() {
             }
 
             tracing::info!("Remote AI IDE backend initialized");
-            eprintln!("[remote-ai-ide] Setup complete ✓");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Setup complete OK");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -243,5 +307,9 @@ pub fn run() {
             commands::config::save_app_config,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .unwrap_or_else(|e| {
+            log_msg!(&log_path_str, "[remote-ai-ide] FATAL: Tauri run() failed: {e}");
+            panic!("Tauri run failed: {e}");
+        });
+    log_msg!(&log_path_str, "[remote-ai-ide] run() returned — process exiting normally");
 }

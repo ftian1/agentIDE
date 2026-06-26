@@ -47,12 +47,15 @@ impl SessionRegistry {
         self.sessions.remove(id).map(|(_, v)| v)
     }
 
-    /// Shut down all sessions gracefully.
+    /// Shut down all sessions — send PTY shutdown signal AND kill child processes.
     pub fn shutdown_all(&self) {
         for item in self.sessions.iter() {
             let session = item.value();
+            let pid = session.pid;
+            tracing::info!(session_id = %session.id, pid = pid, "Shutting down session");
+            // Signal the PTY writer thread to stop.
             let _ = session.pty_op_tx.send(PtyOp::Shutdown);
-            // Mark as ended
+            // Mark as ended.
             let rt = tokio::runtime::Handle::current();
             let _ = rt.block_on(async {
                 let mut state = session.state.write().await;
@@ -60,6 +63,22 @@ impl SessionRegistry {
                     *state = SessionState::Ended(EndReason::ConnectionLost);
                 }
             });
+            // Kill the child CLI process (and its children) so they don't
+            // become orphans when the agent exits.
+            if pid > 1 {
+                // SIGTERM first, then SIGKILL after a short grace period.
+                let _ = std::process::Command::new("kill")
+                    .arg("-TERM")
+                    .arg(pid.to_string())
+                    .output();
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                // Kill entire process group in case CLI spawned subprocesses.
+                let _ = std::process::Command::new("kill")
+                    .arg("-KILL")
+                    .arg(format!("-{}", pid)) // negative PID = process group
+                    .output();
+                tracing::info!(pid = pid, "Killed child process group");
+            }
         }
         self.sessions.clear();
     }

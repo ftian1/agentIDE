@@ -7,7 +7,7 @@ import { loadPersisted, savePersisted } from '../lib/storage';
 
 const STORE_KEY = 'remote-ai-ide:agent-engine';
 
-export type AgentKind = 'claude' | 'opencode' | 'codex' | 'hermes';
+export type AgentKind = 'claude' | 'copilot' | 'gemini' | 'opencode' | 'codex' | 'hermes';
 
 export interface AgentEngineConfig {
   workDir: string;
@@ -19,8 +19,10 @@ export interface AgentEngineConfig {
   envModels: Record<string, string>;
   /** Generic key/value env vars (non-Claude agents, or extras). */
   extraEnv: { key: string; value: string }[];
-  /** Direct API key for the CLI. When set, passes ANTHROPIC_API_KEY.
-   *  When empty, the gateway/proxy handles auth with ANTHROPIC_AUTH_TOKEN=dummy. */
+  /** Direct API key for the CLI. When set, passes the agent-specific auth
+   *  env var (ANTHROPIC_API_KEY / GEMINI_API_KEY / COPILOT_GITHUB_TOKEN /
+   *  OPENCODE_API_KEY / OPENROUTER_API_KEY / OPENAI_API_KEY).
+   *  When empty, the gateway/proxy handles auth. */
   authKey: string;
 }
 
@@ -37,6 +39,8 @@ function emptyConfig(): AgentEngineConfig {
 
 const DEFAULT_CONFIGS: Record<AgentKind, AgentEngineConfig> = {
   claude: emptyConfig(),
+  copilot: emptyConfig(),
+  gemini: emptyConfig(),
   opencode: emptyConfig(),
   codex: emptyConfig(),
   hermes: emptyConfig(),
@@ -65,6 +69,8 @@ export interface AgentProfile {
 
 export const AGENT_LABELS: Record<AgentKind, string> = {
   claude: 'Claude Code',
+  copilot: 'GitHub Copilot',
+  gemini: 'Gemini CLI',
   opencode: 'OpenCode',
   codex: 'Codex',
   hermes: 'Hermes',

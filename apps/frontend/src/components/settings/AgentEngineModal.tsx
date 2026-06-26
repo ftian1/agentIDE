@@ -15,6 +15,7 @@ import { useSessionStore } from '../../stores/sessionStore';
 import { useLayoutStore } from '../../stores/layoutStore';
 import { useLlmProviderStore } from '../../stores/llmProviderStore';
 import { log } from '../../lib/debugLog';
+import { buildSpawnEnv } from '../../lib/spawnEnv';
 import {
   useAgentEngineStore,
   type AgentKind,
@@ -32,6 +33,8 @@ const labelCls = 'text-xs text-text-secondary block mb-1';
 
 const AGENTS: { kind: AgentKind; label: string; tool: string }[] = [
   { kind: 'claude', label: 'Claude Code CLI', tool: 'claude' },
+  { kind: 'copilot', label: 'GitHub Copilot CLI', tool: 'copilot' },
+  { kind: 'gemini', label: 'Gemini CLI', tool: 'gemini' },
   { kind: 'opencode', label: 'OpenCode', tool: 'opencode' },
   { kind: 'codex', label: 'Codex', tool: 'codex' },
   { kind: 'hermes', label: 'Hermes', tool: 'hermes' },
@@ -88,13 +91,25 @@ export function AgentEngineModal({ onClose }: Props) {
   const [user, setUser] = useState(lastConn.user);
   const [authMethod, setAuthMethod] = useState(lastConn.authMethod);
   const [password, setPassword] = useState('');
+  const [savePassword, setSavePassword] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Load saved password when modal opens for a known host.
   useEffect(() => {
     if (!providersLoaded) loadProviders();
   }, [providersLoaded, loadProviders]);
+
+  useEffect(() => {
+    if (host && user) {
+      const saved = localStorage.getItem(`agentMgr:pwd:${host}:${port}:${user}`);
+      if (saved) {
+        setPassword(saved);
+        setSavePassword(true);
+      }
+    }
+  }, [host, port, user]);
 
   // Flattened model options from all configured providers.
   const modelOptions = useMemo(
@@ -119,12 +134,27 @@ export function AgentEngineModal({ onClose }: Props) {
     setShowErrors(false);
     setError(null);
     setLastConn({ host, port, user, authMethod });
+    // Persist or clear password based on checkbox.
+    const key = `agentMgr:pwd:${host}:${port}:${user}`;
+    if (savePassword && authMethod === 'password') {
+      localStorage.setItem(key, password);
+    } else {
+      localStorage.removeItem(key);
+    }
     setTab('agent');
   };
 
   const handleLaunch = async () => {
     setBusy(true);
     setError(null);
+
+    // Save config before launching so it persists even if we close early.
+    setLastConn({ host, port, user, authMethod });
+
+    // Close modal immediately — connection + spawn happen in background.
+    // The AgentManager panel shows reconnect progress inline.
+    onClose();
+
     try {
       // Connect if there's no active connection.
       let connId = activeConnectionId;
@@ -139,9 +169,7 @@ export function AgentEngineModal({ onClose }: Props) {
         connId = info.id;
       }
 
-      // Build args. For Claude, always include --dangerously-skip-permissions
-      // since this is an automated/IDE context (the user approves via the
-      // frontend approval queue, not the CLI prompt).
+      // Build args. For Claude, always include --dangerously-skip-permissions.
       const args: string[] = [];
       if (agent === 'claude') {
         args.push('--dangerously-skip-permissions');
@@ -154,58 +182,14 @@ export function AgentEngineModal({ onClose }: Props) {
         args.push(...cfg.extraArgs.trim().split(/\s+/));
       }
 
-      // Build env.
-      const env: Record<string, string> = {};
-      if (agent === 'claude') {
-        for (const [k, v] of Object.entries(cfg.envModels)) {
-          if (v) env[k] = v;
-        }
-      }
-      for (const { key, value } of cfg.extraEnv) {
-        if (key.trim()) env[key.trim()] = value;
-      }
+      // Build env — shared logic, used by both AgentEngineModal & AgentManagerPanel.
+      const env = buildSpawnEnv(agent, cfg, providers, activeModel?.modelId);
+      log('system', 'Auth: ' + (cfg.authKey?.trim()
+        ? 'using user-provided CLI auth key (passthrough mode)'
+        : env.__providers_json
+          ? `proxy routing mode, ${JSON.parse(env.__providers_json).length} provider(s) → __providers_json`
+          : 'no auth key, no configured providers — proxy will passthrough'));
 
-      // ── ANTHROPIC env vars ─────────────────────────────────────
-      const cliAuthKey = cfg.authKey?.trim();
-      if (cliAuthKey) {
-        // User provided their own key → pass directly, CLI uses it to auth.
-        env.ANTHROPIC_API_KEY = cliAuthKey;
-        log('system', 'Auth: using user-provided CLI auth key');
-      } else {
-        // No user key → route through the gateway/proxy on the remote agent.
-        // The proxy sets ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN=dummy;
-        // it injects the real provider token when forwarding.
-        const provider = activeModel
-          ? providers.find((p) => p.id === activeModel.providerId)
-          : providers.find((p) => p.apiKey) ?? providers.find((p) => p.copilotToken);
-
-        if (provider?.kind === 'copilot' && provider.copilotToken) {
-          env.__gateway_provider = 'copilot';
-          env.__gateway_token = provider.copilotToken;
-          env.__gateway_mode = 'passthrough';
-          log('system', 'Auth: using Copilot gateway token');
-        } else if (provider?.apiKey) {
-          const base = (provider.baseUrl || '').replace(/\/+$/, '');
-          if (provider.kind === 'deepseek') {
-            env.__gateway_provider = 'deepseek';
-            env.__gateway_token = provider.apiKey;
-            env.__gateway_mode = 'passthrough';
-            log('system', `Auth: using DeepSeek gateway → ${base}/anthropic`);
-          } else {
-            env.__gateway_provider = 'openai';
-            env.__gateway_token = provider.apiKey;
-            env.__gateway_mode = 'passthrough';
-            log('system', `Auth: using provider gateway → ${base}`);
-          }
-        } else {
-          // No provider configured either — still pass dummy so tap proxy can
-          // record traffic; user must have API key set in remote shell profile.
-          log('system', 'Auth: no provider, no auth key — passing dummy (tap will not inject auth)');
-        }
-      }
-
-      const launchEnv = Object.keys(env).length > 0 ? env : {};
-      log('system', 'Launch env: ' + JSON.stringify(launchEnv));
       const sessionInfo = await spawn(connId, {
         tool: meta.tool,
         args,
@@ -221,10 +205,10 @@ export function AgentEngineModal({ onClose }: Props) {
         lastConn: { host, port, user, authMethod },
         config: cfg,
       });
-
-      onClose();
     } catch (e) {
       setError(String(e));
+      // Re-open modal on error so the user sees the message.
+      setOpenModal('agentEngine');
     } finally {
       setBusy(false);
     }
@@ -232,7 +216,16 @@ export function AgentEngineModal({ onClose }: Props) {
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-bg-secondary border border-border rounded-lg w-[600px] max-h-[85vh] shadow-2xl flex flex-col">
+      <form className="bg-bg-secondary border border-border rounded-lg w-[600px] max-h-[85vh] shadow-2xl flex flex-col"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (busy) return;
+          if (tab === 'connection') {
+            handleContinue();
+          } else {
+            handleLaunch();
+          }
+        }}>
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <h2 className="text-sm font-semibold">Agent Engine Settings</h2>
@@ -270,6 +263,7 @@ export function AgentEngineModal({ onClose }: Props) {
               user={user} setUser={setUser}
               authMethod={authMethod} setAuthMethod={setAuthMethod}
               password={password} setPassword={setPassword}
+              savePassword={savePassword} setSavePassword={setSavePassword}
               showErrors={showErrors}
             />
           ) : agent === 'claude' ? (
@@ -308,7 +302,7 @@ export function AgentEngineModal({ onClose }: Props) {
         <div className="flex justify-between gap-2 px-4 py-3 border-t border-border">
           <div>
             {tab === 'agent' && (
-              <button
+              <button type="button"
                 onClick={() => { setTab('connection'); setShowErrors(false); }}
                 className="px-3 py-1.5 text-xs rounded bg-bg-tertiary hover:bg-border text-text-secondary"
               >
@@ -317,23 +311,21 @@ export function AgentEngineModal({ onClose }: Props) {
             )}
           </div>
           <div className="flex gap-2">
-            <button
+            <button type="button"
               onClick={onClose}
               className="px-3 py-1.5 text-xs rounded bg-bg-tertiary hover:bg-border text-text-secondary"
             >
               Cancel
             </button>
             {tab === 'connection' ? (
-              <button
-                onClick={handleContinue}
+              <button type="submit"
                 disabled={!host.trim() || !user.trim() || (authMethod === 'password' && !password)}
                 className="px-4 py-1.5 text-xs rounded bg-accent text-white hover:bg-blue-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Continue →
               </button>
             ) : (
-              <button
-                onClick={handleLaunch}
+              <button type="submit"
                 disabled={busy}
                 className="px-4 py-1.5 text-xs rounded bg-accent text-white hover:bg-blue-500 transition-colors disabled:opacity-50 flex items-center gap-1.5"
               >
@@ -345,7 +337,7 @@ export function AgentEngineModal({ onClose }: Props) {
             )}
           </div>
         </div>
-      </div>
+      </form>
     </div>
   );
 }
@@ -358,6 +350,7 @@ interface ConnectionTabProps {
   user: string; setUser: (v: string) => void;
   authMethod: 'key' | 'password' | 'agent'; setAuthMethod: (v: 'key' | 'password' | 'agent') => void;
   password: string; setPassword: (v: string) => void;
+  savePassword: boolean; setSavePassword: (v: boolean) => void;
   /** Set to true after the first "Continue" click to show validation errors. */
   showErrors: boolean;
 }
@@ -433,6 +426,15 @@ function ConnectionTab(p: ConnectionTabProps) {
           <label className={labelCls}>Password *</label>
           <input type="password" className={inputCls(missingPwd)} value={p.password} onChange={(e) => p.setPassword(e.target.value)} />
           {missingPwd && <p className="text-[10px] text-red-400 mt-0.5">Password is required for password auth.</p>}
+          <label className="flex items-center gap-1.5 mt-2 text-xs text-text-secondary cursor-pointer">
+            <input
+              type="checkbox"
+              checked={p.savePassword}
+              onChange={(e) => p.setSavePassword(e.target.checked)}
+              className="w-3.5 h-3.5"
+            />
+            Save password for future reconnects
+          </label>
         </div>
       )}
 
@@ -631,7 +633,7 @@ function GenericAgentTab({ label, cfg, setConfig, agent, setAgent }: GenericTabP
         />
       </div>
 
-      <p className="text-xs text-text-secondary">{label} — generic configuration.</p>
+      <p className="text-xs text-text-secondary">{label} — supports auth key (passed as env var), work dir, args, and extra env.</p>
       <div>
         <label className={labelCls}>Work Directory</label>
         <input

@@ -1,0 +1,182 @@
+# App command permissions — one per #[tauri::command].
+# Format: identifier = "allow-{kebab-cmd}", commands.allow = ["{snake_cmd}"]
+
+[[permission]]
+identifier = "allow-connect"
+description = "Enables the connect command."
+commands.allow = ["connect"]
+
+[[permission]]
+identifier = "allow-disconnect"
+description = "Enables the disconnect command."
+commands.allow = ["disconnect"]
+
+[[permission]]
+identifier = "allow-list-connections"
+description = "Enables the list_connections command."
+commands.allow = ["list_connections"]
+
+[[permission]]
+identifier = "allow-list-ssh-configs"
+description = "Enables the list_ssh_configs command."
+commands.allow = ["list_ssh_configs"]
+
+[[permission]]
+identifier = "allow-list-files"
+description = "Enables the list_files command."
+commands.allow = ["list_files"]
+
+[[permission]]
+identifier = "allow-read-file"
+description = "Enables the read_file command."
+commands.allow = ["read_file"]
+
+[[permission]]
+identifier = "allow-write-file"
+description = "Enables the write_file command."
+commands.allow = ["write_file"]
+
+[[permission]]
+identifier = "allow-git-branches"
+description = "Enables the git_branches command."
+commands.allow = ["git_branches"]
+
+[[permission]]
+identifier = "allow-git-checkout"
+description = "Enables the git_checkout command."
+commands.allow = ["git_checkout"]
+
+[[permission]]
+identifier = "allow-spawn-session"
+description = "Enables the spawn_session command."
+commands.allow = ["spawn_session"]
+
+[[permission]]
+identifier = "allow-close-session"
+description = "Enables the close_session command."
+commands.allow = ["close_session"]
+
+[[permission]]
+identifier = "allow-resize-terminal"
+description = "Enables the resize_terminal command."
+commands.allow = ["resize_terminal"]
+
+[[permission]]
+identifier = "allow-write-input"
+description = "Enables the write_input command."
+commands.allow = ["write_input"]
+
+[[permission]]
+identifier = "allow-send-agent-message"
+description = "Enables the send_agent_message command."
+commands.allow = ["send_agent_message"]
+
+[[permission]]
+identifier = "allow-apply-code-change"
+description = "Enables the apply_code_change command."
+commands.allow = ["apply_code_change"]
+
+[[permission]]
+identifier = "allow-reject-code-change"
+description = "Enables the reject_code_change command."
+commands.allow = ["reject_code_change"]
+
+[[permission]]
+identifier = "allow-probe-tool"
+description = "Enables the probe_tool command."
+commands.allow = ["probe_tool"]
+
+[[permission]]
+identifier = "allow-install-tool"
+description = "Enables the install_tool command."
+commands.allow = ["install_tool"]
+
+[[permission]]
+identifier = "allow-load-agent-settings"
+description = "Enables the load_agent_settings command."
+commands.allow = ["load_agent_settings"]
+
+[[permission]]
+identifier = "allow-save-agent-settings"
+description = "Enables the save_agent_settings command."
+commands.allow = ["save_agent_settings"]
+
+[[permission]]
+identifier = "allow-copilot-device-start"
+description = "Enables the copilot_device_start command."
+commands.allow = ["copilot_device_start"]
+
+[[permission]]
+identifier = "allow-copilot-device-poll"
+description = "Enables the copilot_device_poll command."
+commands.allow = ["copilot_device_poll"]
+
+[[permission]]
+identifier = "allow-llm-fetch-models"
+description = "Enables the llm_fetch_models command."
+commands.allow = ["llm_fetch_models"]
+
+[[permission]]
+identifier = "allow-load-llm-providers"
+description = "Enables the load_llm_providers command."
+commands.allow = ["load_llm_providers"]
+
+[[permission]]
+identifier = "allow-save-llm-providers"
+description = "Enables the save_llm_providers command."
+commands.allow = ["save_llm_providers"]
+
+[[permission]]
+identifier = "allow-load-active-model"
+description = "Enables the load_active_model command."
+commands.allow = ["load_active_model"]
+
+[[permission]]
+identifier = "allow-save-active-model"
+description = "Enables the save_active_model command."
+commands.allow = ["save_active_model"]
+
+[[permission]]
+identifier = "allow-load-tap-settings"
+description = "Enables the load_tap_settings command."
+commands.allow = ["load_tap_settings"]
+
+[[permission]]
+identifier = "allow-save-tap-settings"
+description = "Enables the save_tap_settings command."
+commands.allow = ["save_tap_settings"]
+
+[[permission]]
+identifier = "allow-read-tap-traces"
+description = "Enables the read_tap_traces command."
+commands.allow = ["read_tap_traces"]
+
+[[permission]]
+identifier = "allow-clear-tap-traces"
+description = "Enables the clear_tap_traces command."
+commands.allow = ["clear_tap_traces"]
+
+[[permission]]
+identifier = "allow-load-tap-exchanges-db"
+description = "Enables the load_tap_exchanges_db command."
+commands.allow = ["load_tap_exchanges_db"]
+
+[[permission]]
+identifier = "allow-clear-tap-exchanges-db"
+description = "Enables the clear_tap_exchanges_db command."
+commands.allow = ["clear_tap_exchanges_db"]
+
+[[permission]]
+identifier = "allow-respond-approval"
+description = "Enables the respond_approval command."
+commands.allow = ["respond_approval"]
+
+[[permission]]
+identifier = "allow-load-app-config"
+description = "Enables the load_app_config command."
+commands.allow = ["load_app_config"]
+
+[[permission]]
+identifier = "allow-save-app-config"
+description = "Enables the save_app_config command."
+commands.allow = ["save_app_config"]

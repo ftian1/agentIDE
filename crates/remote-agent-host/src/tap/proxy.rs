@@ -23,7 +23,7 @@ use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use shared_protocol::messages::ProtocolMessage;
-use shared_protocol::types::TapMode;
+use shared_protocol::types::{ProviderConfig, TapMode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::UnboundedSender;
@@ -62,6 +62,9 @@ struct ProxyState {
     gateway_mode: Option<String>,
     /// Path prefix to prepend when forwarding (e.g. "/anthropic" for DeepSeek).
     gateway_path_prefix: Option<String>,
+    /// Provider configs for model-based routing (from __providers_json).
+    /// When non-empty, takes precedence over old gateway fields.
+    providers: Vec<ProviderConfig>,
     ca: TapCa,
     client_config: Arc<ClientConfig>,
     seq: Arc<AtomicU64>,
@@ -101,6 +104,7 @@ pub fn start_session_proxy(
     gateway_token: Option<String>,
     gateway_mode: Option<String>,
     gateway_path_prefix: Option<String>,
+    providers: Vec<ProviderConfig>,
 ) -> anyhow::Result<ProxyHandle> {
     ensure_crypto_provider();
     let ca = TapCa::load_or_create()?;
@@ -110,6 +114,20 @@ pub fn start_session_proxy(
     let std_listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
     std_listener.set_nonblocking(true)?;
     let port = std_listener.local_addr()?.port();
+
+    // Log provider configs at startup so we can debug model-id mismatches.
+    let provider_count = providers.len();
+    for p in &providers {
+        tracing::info!(
+            provider_id = %p.id,
+            provider_kind = %p.kind,
+            base_url = %p.base_url,
+            model_ids = ?p.model_ids,
+            has_api_key = p.api_key.is_some(),
+            has_copilot_token = p.copilot_token.is_some(),
+            "tap: provider registered"
+        );
+    }
 
     let state = Arc::new(ProxyState {
         session_id,
@@ -121,6 +139,7 @@ pub fn start_session_proxy(
         gateway_token,
         gateway_mode,
         gateway_path_prefix,
+        providers,
         ca,
         client_config,
         seq: Arc::new(AtomicU64::new(0)),
@@ -152,7 +171,7 @@ pub fn start_session_proxy(
         }
     });
 
-    tracing::info!(port, "tap: proxy started");
+    tracing::info!(port, provider_count, "tap: proxy started");
     Ok(ProxyHandle { port, ca_pem_path, task })
 }
 
@@ -364,20 +383,140 @@ async fn forward(
     };
 
     // ── Determine effective upstream ──────────────────────────────
-    // Parse the CLI-intended upstream, then override if a third-party
-    // provider is configured so we connect to the correct API.
+    // Parse the CLI-intended upstream, then override if a provider or
+    // gateway is configured so we connect to the correct API.
     let (cli_upstream_hostname, cli_upstream_port) = parse_host_port(&upstream_host, 443);
-    let effective_hostname = if let Some(ref gw_provider) = state.gateway_provider {
-        match gw_provider.as_str() {
+
+    // Parse model_id from request body for model-based routing.
+    let model_id = std::str::from_utf8(&req_body_bytes)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| v.get("model")?.as_str().map(String::from));
+
+    tracing::info!(
+        path = %path,
+        model = ?model_id,
+        provider_count = state.providers.len(),
+        "tap: incoming request"
+    );
+
+    // Determine routing: providers → model-based, else old gateway, else passthrough.
+    let (effective_hostname, effective_port, path_prefix, auth_token) = if !state.providers.is_empty() {
+        // ── ROUTING MODE (model-based) ────────────────────────────
+        let found = model_id.as_ref().and_then(|model| {
+            let provider = state.providers.iter().find(|p| p.model_ids.contains(model))?;
+            let kind = &provider.kind;
+            let token = provider.api_key.as_deref()
+                .or_else(|| provider.copilot_token.as_deref());
+            let pp = crate::tap::provider_path_prefix(kind).unwrap_or("");
+
+            let (host, port) = if kind == "copilot" {
+                ("api.githubcopilot.com".to_string(), 443u16)
+            } else {
+                crate::tap::provider_upstream_host(&provider.base_url)
+                    .unwrap_or_else(|| (cli_upstream_hostname.clone(), cli_upstream_port))
+            };
+
+            tracing::info!(
+                model = %model,
+                provider_id = %provider.id,
+                provider_kind = %kind,
+                upstream = %host,
+                path_prefix = pp,
+                has_auth = token.is_some(),
+                "tap: model matched → routing"
+            );
+            Some((host, port, pp.to_string(), token.map(String::from)))
+        });
+
+        match found {
+            Some(r) => r,
+            None if model_id.is_some() => {
+                // Model IS present in request but NOT found in any provider.
+                // This is a bug — dump the available models so we can fix it.
+                let model = model_id.as_deref().unwrap_or("?");
+                let all_models: Vec<String> = state.providers.iter()
+                    .flat_map(|p| p.model_ids.iter().map(|m| format!("{}/{}", p.id, m)))
+                    .collect();
+                tracing::error!(
+                    requested_model = %model,
+                    available_models = ?all_models,
+                    "tap: MODEL MISMATCH — requested model not in any provider! Check provider modelIds config."
+                );
+                // Passthrough: let it hit the upstream so the error is visible.
+                (cli_upstream_hostname.clone(), cli_upstream_port, String::new(), None)
+            }
+            None => {
+                // No model field in request body (preflight / health-check).
+                // Use the first provider so the CLI doesn't get a 403 from
+                // api.anthropic.com and prompt "please run /login".
+                tracing::info!(
+                    "tap: no model in request body (preflight), using first provider"
+                );
+                let fallback = state.providers.first()
+                    .and_then(|p| {
+                        let kind = &p.kind;
+                        let token = p.api_key.as_deref()
+                            .or_else(|| p.copilot_token.as_deref());
+                        let pp = crate::tap::provider_path_prefix(kind).unwrap_or("");
+                        let (host, port) = if kind == "copilot" {
+                            ("api.githubcopilot.com".to_string(), 443u16)
+                        } else {
+                            crate::tap::provider_upstream_host(&p.base_url)
+                                .unwrap_or_else(|| (cli_upstream_hostname.clone(), cli_upstream_port))
+                        };
+                        tracing::info!(
+                            provider_id = %p.id,
+                            provider_kind = %kind,
+                            upstream = %host,
+                            has_auth = token.is_some(),
+                            "tap: preflight → first provider"
+                        );
+                        Some((host, port, pp.to_string(), token.map(String::from)))
+                    });
+                match fallback {
+                    Some(r) => r,
+                    None => {
+                        tracing::warn!("tap: no providers, passthrough");
+                        (cli_upstream_hostname.clone(), cli_upstream_port, String::new(), None)
+                    }
+                }
+            }
+        }
+    } else if let Some(ref gw_provider) = state.gateway_provider {
+        // ── OLD GATEWAY ROUTING (backward compat) ─────────────────
+        let host = match gw_provider.as_str() {
             "copilot" => "api.githubcopilot.com".to_string(),
             other => format!("api.{other}.com"),
-        }
+        };
+        let pp = state.gateway_path_prefix.as_deref().unwrap_or("").to_string();
+        let token = state.gateway_token.clone();
+        tracing::info!(provider = %gw_provider, upstream = %host, "tap: old gateway routing");
+        (host, cli_upstream_port, pp, token)
+    } else if let Some(ref gw_token) = state.gateway_token {
+        // Gateway token without provider — just inject auth header.
+        tracing::info!("tap: gateway token present (passthrough upstream, inject auth)");
+        (cli_upstream_hostname.clone(), cli_upstream_port, String::new(), Some(gw_token.clone()))
     } else {
-        cli_upstream_hostname.clone()
+        // ── PASSTHROUGH MODE ─────────────────────────────────────
+        // No providers, no gateway — just forward as-is.
+        (cli_upstream_hostname.clone(), cli_upstream_port, String::new(), None)
     };
-    let effective_port = cli_upstream_port;
-    let path_prefix = state.gateway_path_prefix.as_deref().unwrap_or("");
+
     let effective_url = format!("https://{effective_hostname}{path_prefix}{path}");
+
+    // Log the full routing decision for debugging.
+    tracing::info!(
+        method = %method,
+        effective_url = %effective_url,
+        upstream = %effective_hostname,
+        port = effective_port,
+        path_prefix = if path_prefix.is_empty() { "(none)" } else { path_prefix.as_str() },
+        has_auth = auth_token.is_some(),
+        "tap: forwarding request to upstream"
+    );
+    // Keep a clone for later logging after the builder consumes the original.
+    let log_url = effective_url.clone();
 
     let builder = ExchangeBuilder {
         exchange_id: uuid::Uuid::new_v4().to_string(),
@@ -398,22 +537,34 @@ async fn forward(
     let tcp = if let Some(proxy) = use_proxy {
         match tunnel_via_proxy(&proxy.host, proxy.port, &effective_hostname, effective_port).await {
             Ok(t) => t,
-            Err(e) => return error_response(502, &format!("upstream proxy tunnel: {e}")),
+            Err(e) => {
+                tracing::error!(target = %effective_hostname, %effective_port, error = %e, "tap: connect via proxy FAILED");
+                return error_response(502, &format!("upstream proxy tunnel: {e}"));
+            }
         }
     } else {
         match TcpStream::connect((effective_hostname.as_str(), effective_port)).await {
             Ok(t) => t,
-            Err(e) => return error_response(502, &format!("connect upstream: {e}")),
+            Err(e) => {
+                tracing::error!(target = %effective_hostname, %effective_port, error = %e, "tap: connect upstream FAILED");
+                return error_response(502, &format!("connect upstream: {e}"));
+            }
         }
     };
     let server_name = match ServerName::try_from(effective_hostname.clone()) {
         Ok(n) => n,
-        Err(e) => return error_response(502, &format!("invalid upstream host: {e}")),
+        Err(e) => {
+            tracing::error!(host = %effective_hostname, error = %e, "tap: invalid upstream host");
+            return error_response(502, &format!("invalid upstream host: {e}"));
+        }
     };
     let connector = TlsConnector::from(state.client_config.clone());
     let tls = match connector.connect(server_name, tcp).await {
         Ok(t) => t,
-        Err(e) => return error_response(502, &format!("upstream TLS: {e}")),
+        Err(e) => {
+            tracing::error!(host = %effective_hostname, error = %e, "tap: upstream TLS FAILED");
+            return error_response(502, &format!("upstream TLS: {e}"));
+        }
     };
 
     let (mut sender, conn) = match hyper::client::conn::http1::handshake(TokioIo::new(tls)).await {
@@ -429,11 +580,22 @@ async fn forward(
     {
         let headers = up_req.headers_mut().unwrap();
         *headers = parts.headers;
-        // Inject provider auth token (e.g. Copilot OAuth bearer token).
-        if let Some(ref token) = state.gateway_token {
+        // Inject provider auth token, replacing the CLI's dummy Bearer.
+        if let Some(ref token) = auth_token {
+            let prefix = if token.len() > 8 { &token[..8] } else { token };
+            tracing::info!(
+                token_prefix = %prefix,
+                upstream = %effective_hostname,
+                "tap: injecting real auth token (replacing CLI dummy)"
+            );
             headers.insert(
                 hyper::header::AUTHORIZATION,
                 format!("Bearer {token}").parse().unwrap(),
+            );
+        } else {
+            tracing::info!(
+                upstream = %effective_hostname,
+                "tap: no auth token — preserving original Authorization header (passthrough)"
             );
         }
     }
@@ -444,10 +606,28 @@ async fn forward(
 
     let upstream_resp = match sender.send_request(up_req).await {
         Ok(r) => r,
-        Err(e) => return error_response(502, &format!("upstream request: {e}")),
+        Err(e) => {
+            let elapsed = start.elapsed();
+            tracing::warn!(
+                method = %method,
+                url = %log_url,
+                error = %e,
+                elapsed_ms = elapsed.as_millis() as u64,
+                "tap: upstream request FAILED"
+            );
+            return error_response(502, &format!("upstream request: {e}"));
+        }
     };
 
     let status = upstream_resp.status();
+    let elapsed = start.elapsed();
+    tracing::info!(
+        method = %method,
+        url = %log_url,
+        status = status.as_u16(),
+        elapsed_ms = elapsed.as_millis() as u64,
+        "tap: upstream response received"
+    );
     let resp_header_pairs: Vec<(String, String)> = upstream_resp
         .headers()
         .iter()

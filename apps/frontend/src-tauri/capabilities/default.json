@@ -3,7 +3,11 @@
   "identifier": "default",
   "description": "Default capability for the main window",
   "windows": ["main"],
+  "remote": {
+    "urls": ["http://*:*"]
+  },
   "permissions": [
+    "default",
     "core:default",
     "shell:allow-open",
     "core:event:default",

@@ -618,9 +618,6 @@ pub async fn write_input(
     app_handle: tauri::AppHandle,
 ) -> Result<(), String> {
     use crate::backend_log;
-    let preview = String::from_utf8_lossy(&data[..data.len().min(20)]);
-    tracing::info!(%session_id, len = data.len(), %preview, "write_input: looking up transport");
-    backend_log!(&app_handle, "[write_input] session={} len={} preview={}", session_id, data.len(), preview);
 
     let transport = resolve_session_transport(&state, &session_id)
         .ok_or_else(|| {
@@ -637,7 +634,6 @@ pub async fn write_input(
             format!("Send failed: {}", e)
         })?;
 
-    tracing::info!(%session_id, "write_input: sent OK");
     Ok(())
 }
 

@@ -324,11 +324,11 @@ impl Server {
 
         let mut env = env;
 
-        // ── Unified proxy (tap + gateway) ───────────────────────────
+        // ── Unified proxy (tap + gateway + providers) ─────────────────
         // One local HTTP proxy handles both traffic recording (tap) and
-        // third-party provider routing (gateway). It always records
-        // HttpTraffic; if a provider token is present it also injects auth
-        // headers and routes to the provider's upstream.
+        // third-party provider routing (gateway / model-based providers).
+        // It always records HttpTraffic; if a provider token is present it
+        // also injects auth headers and routes to the provider's upstream.
         //
         // Capture the ORIGINAL upstream proxy BEFORE the tap overwrites
         // HTTPS_PROXY — needed for forward() to CONNECT-tunnel outbound.
@@ -341,16 +341,27 @@ impl Server {
             from_env_map.or(from_host)
                 .and_then(|v| crate::tap::parse_upstream_proxy(&v))
         };
-        let tap_cfg = crate::tap::TapConfig::take_from_env(&mut env);
+        let mut tap_cfg = crate::tap::TapConfig::take_from_env(&mut env);
+        // When a third-party gateway OR model-based providers are active we MUST
+        // use Reverse mode so that proxy_env() injects ANTHROPIC_BASE_URL.
+        // Without it the CLI talks to api.anthropic.com directly and routing is
+        // never reached.
+        let has_gateway = tap_cfg.gateway_token.is_some()
+            || tap_cfg.gateway_provider.is_some();
+        let has_providers = !tap_cfg.providers.is_empty();
+        if has_gateway || has_providers {
+            tap_cfg.mode = shared_protocol::types::TapMode::Reverse;
+        }
         // The proxy is started when either tap recording is on OR a
-        // third-party provider needs routing (gateway has a token).
-        let need_proxy = tap_cfg.enabled
-            || tap_cfg.gateway_token.is_some();
+        // third-party provider needs routing (gateway or model-based providers).
+        let need_proxy = tap_cfg.enabled || has_gateway || has_providers;
         if need_proxy {
-            // Upstream: gateway provider takes priority; fall back to tool default.
-            // DeepSeek's Anthropic-compatible API lives under /anthropic, so the
-            // proxy must prepend /anthropic to the request path when forwarding.
-            let upstream = if tap_cfg.gateway_provider.is_some() {
+            // Upstream (fallback): for reverse mode with no providers, use the
+            // tool's default upstream.  With providers, routing is per-request
+            // so the upstream is just a fallback — use api.anthropic.com.
+            let upstream = if has_providers {
+                Some("api.anthropic.com".to_string())
+            } else if tap_cfg.gateway_provider.is_some() {
                 tap_cfg.gateway_provider.as_deref().map(|p| match p {
                     "copilot" => "api.githubcopilot.com".to_string(),
                     "deepseek" => "api.deepseek.com".to_string(),
@@ -376,15 +387,16 @@ impl Server {
                 tap_cfg.gateway_token.clone(),
                 tap_cfg.gateway_mode.clone(),
                 gateway_path_prefix.clone(),
+                tap_cfg.providers.clone(),
             ) {
                 Ok(handle) => {
                     let port = handle.port;
-                    for (k, v) in crate::tap::proxy_env(&tap_cfg.mode, port, &handle.ca_pem_path) {
+                    for (k, v) in crate::tap::proxy_env(&tap_cfg.mode, port, &handle.ca_pem_path, &tool) {
                         env.insert(k, v);
                     }
                     self.tap_proxies.insert(session_id.clone(), handle);
                     let gw_label = tap_cfg.gateway_provider.as_deref().unwrap_or("none");
-                    tracing::info!(%session_id, port, gateway = %gw_label, "proxy: enabled (tap + gateway unified)");
+                    tracing::info!(%session_id, port, gateway = %gw_label, providers_len = tap_cfg.providers.len(), "proxy: enabled (tap + gateway unified)");
                 }
                 Err(e) => {
                     tracing::error!(%session_id, error = %e, "tap: failed to start, continuing without");
@@ -426,8 +438,8 @@ impl Server {
         let launch_cmd_str = format!("{} {}", command, exec_args.join(" "));
         let launch_cwd = cwd.clone().unwrap_or_default();
         let mut launch_data = std::collections::HashMap::new();
-        launch_data.insert("command".to_string(), launch_cmd_str);
-        launch_data.insert("cwd".to_string(), launch_cwd);
+        launch_data.insert("command".to_string(), launch_cmd_str.clone());
+        launch_data.insert("cwd".to_string(), launch_cwd.clone());
         for (k, v) in &env {
             if k.starts_with("ANTHROPIC_") || k.starts_with("OPENAI_")
                 || k == "TERM" || k.starts_with("__tap") || k.starts_with("__gateway")
@@ -444,9 +456,18 @@ impl Server {
         }
 
         tracing::info!(%session_id, cmd = %command, args = ?exec_args, cwd = ?cwd, cols, rows,
-            env_anthropic = ?env.get("ANTHROPIC_BASE_URL"),
-            env_tap = ?env.get("__tap_enabled"),
+            anthropic_base_url = ?env.get("ANTHROPIC_BASE_URL"),
+            anthropic_auth_token = ?env.get("ANTHROPIC_AUTH_TOKEN"),
+            openai_base_url = ?env.get("OPENAI_BASE_URL"),
+            has_gateway = tap_cfg.gateway_provider.is_some(),
+            tap_mode = ?tap_cfg.mode,
             "handle_spawn: launching CLI");
+        // Full dump at info level so it always appears in agent.log.
+        tracing::info!(%session_id,
+            launch_cmd = %launch_cmd_str,
+            launch_cwd = %launch_cwd,
+            full_env = ?env,
+            "handle_spawn: CLI launch details");
         let handles = match worker::spawn_cli(&command, &exec_args, &env, cwd.as_deref(), cols, rows) {
             Ok(h) => h,
             Err(e) => {
@@ -525,7 +546,7 @@ impl Server {
     async fn handle_input(&self, session_id: &str, data: Vec<u8>) {
         let preview = String::from_utf8_lossy(&data[..data.len().min(20)]);
         if let Some(session) = self.sessions.get(session_id) {
-            tracing::info!(%session_id, len = data.len(), %preview, "handle_input: writing to PTY");
+            tracing::trace!(%session_id, len = data.len(), %preview, "handle_input: writing to PTY");
             let _ = session.pty_op_tx.send(PtyOp::Write(data));
         } else {
             tracing::warn!(%session_id, %preview, "handle_input: session NOT FOUND");
@@ -603,7 +624,8 @@ impl Server {
     }
 
     pub fn shutdown(&mut self) {
-        tracing::info!("Server shutdown initiated");
-        // Session cleanup happens via Drop impls
+        tracing::info!("Server shutdown initiated — killing all child processes");
+        self.registry.shutdown_all();
+        tracing::info!("Server shutdown complete");
     }
 }
