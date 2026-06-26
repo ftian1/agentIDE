@@ -324,11 +324,10 @@ impl Server {
 
         let mut env = env;
 
-        // ── Unified proxy (tap + gateway + providers) ─────────────────
-        // One local HTTP proxy handles both traffic recording (tap) and
-        // third-party provider routing (gateway / model-based providers).
-        // It always records HttpTraffic; if a provider token is present it
-        // also injects auth headers and routes to the provider's upstream.
+        // ── MITM proxy (tap + providers) ────────────────────────────
+        // All CLI traffic is intercepted via HTTP_PROXY/HTTPS_PROXY →
+        // CONNECT tunnel → TLS termination.  Provider routing and auth
+        // injection happen in forward() based on model-id matching.
         //
         // Capture the ORIGINAL upstream proxy BEFORE the tap overwrites
         // HTTPS_PROXY — needed for forward() to CONNECT-tunnel outbound.
@@ -341,37 +340,21 @@ impl Server {
             from_env_map.or(from_host)
                 .and_then(|v| crate::tap::parse_upstream_proxy(&v))
         };
-        let mut tap_cfg = crate::tap::TapConfig::take_from_env(&mut env);
-        // When a third-party gateway OR model-based providers are active we MUST
-        // use Reverse mode so that proxy_env() injects ANTHROPIC_BASE_URL.
-        // Without it the CLI talks to api.anthropic.com directly and routing is
-        // never reached.
+        let tap_cfg = crate::tap::TapConfig::take_from_env(&mut env);
         let has_gateway = tap_cfg.gateway_token.is_some()
             || tap_cfg.gateway_provider.is_some();
         let has_providers = !tap_cfg.providers.is_empty();
-        if has_gateway || has_providers {
-            tap_cfg.mode = shared_protocol::types::TapMode::Reverse;
-        }
-        // The proxy is started when either tap recording is on OR a
-        // third-party provider needs routing (gateway or model-based providers).
         let need_proxy = tap_cfg.enabled || has_gateway || has_providers;
+
+        tracing::info!(
+            has_gateway,
+            has_providers,
+            providers_len = tap_cfg.providers.len(),
+            enabled = tap_cfg.enabled,
+            "tap: starting Mitm proxy"
+        );
+
         if need_proxy {
-            // Upstream (fallback): for reverse mode with no providers, use the
-            // tool's default upstream.  With providers, routing is per-request
-            // so the upstream is just a fallback — use api.anthropic.com.
-            let upstream = if has_providers {
-                Some("api.anthropic.com".to_string())
-            } else if tap_cfg.gateway_provider.is_some() {
-                tap_cfg.gateway_provider.as_deref().map(|p| match p {
-                    "copilot" => "api.githubcopilot.com".to_string(),
-                    "deepseek" => "api.deepseek.com".to_string(),
-                    other => format!("api.{other}.com"),
-                })
-            } else if matches!(tap_cfg.mode, shared_protocol::types::TapMode::Reverse) {
-                Some(crate::tap::reverse_upstream_for(&tool).to_string())
-            } else {
-                None
-            };
             let gateway_path_prefix = tap_cfg.gateway_provider.as_deref()
                 .and_then(|p| match p {
                     "deepseek" => Some("/anthropic".to_string()),
@@ -380,23 +363,21 @@ impl Server {
             match crate::tap::proxy::start_session_proxy(
                 session_id.clone(),
                 transport_tx.clone(),
-                tap_cfg.mode.clone(),
-                upstream,
+                None,  // upstream_host — not needed for Mitm
                 original_upstream_proxy,
                 tap_cfg.gateway_provider.clone(),
                 tap_cfg.gateway_token.clone(),
-                tap_cfg.gateway_mode.clone(),
-                gateway_path_prefix.clone(),
+                gateway_path_prefix,
                 tap_cfg.providers.clone(),
             ) {
                 Ok(handle) => {
                     let port = handle.port;
-                    for (k, v) in crate::tap::proxy_env(&tap_cfg.mode, port, &handle.ca_pem_path, &tool) {
+                    for (k, v) in crate::tap::proxy_env(port, &handle.ca_pem_path) {
                         env.insert(k, v);
                     }
                     self.tap_proxies.insert(session_id.clone(), handle);
                     let gw_label = tap_cfg.gateway_provider.as_deref().unwrap_or("none");
-                    tracing::info!(%session_id, port, gateway = %gw_label, providers_len = tap_cfg.providers.len(), "proxy: enabled (tap + gateway unified)");
+                    tracing::info!(%session_id, port, gateway = %gw_label, providers_len = tap_cfg.providers.len(), "proxy: Mitm enabled");
                 }
                 Err(e) => {
                     tracing::error!(%session_id, error = %e, "tap: failed to start, continuing without");
@@ -456,11 +437,9 @@ impl Server {
         }
 
         tracing::info!(%session_id, cmd = %command, args = ?exec_args, cwd = ?cwd, cols, rows,
-            anthropic_base_url = ?env.get("ANTHROPIC_BASE_URL"),
-            anthropic_auth_token = ?env.get("ANTHROPIC_AUTH_TOKEN"),
-            openai_base_url = ?env.get("OPENAI_BASE_URL"),
+            http_proxy = ?env.get("HTTP_PROXY"),
             has_gateway = tap_cfg.gateway_provider.is_some(),
-            tap_mode = ?tap_cfg.mode,
+            providers = tap_cfg.providers.len(),
             "handle_spawn: launching CLI");
         // Full dump at info level so it always appears in agent.log.
         tracing::info!(%session_id,

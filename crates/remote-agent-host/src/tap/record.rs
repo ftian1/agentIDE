@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use shared_protocol::types::{HttpExchange, TapMode};
+use shared_protocol::types::HttpExchange;
 
 /// Max bytes captured per body. Larger bodies are truncated (`truncated: true`).
 pub const BODY_CAP: usize = 1024 * 1024; // 1 MiB
@@ -59,7 +59,6 @@ pub struct ExchangeBuilder {
     pub req_headers: HashMap<String, String>,
     pub req_body: Vec<u8>,
     pub started_at: u64,
-    pub mode: TapMode,
 }
 
 impl ExchangeBuilder {
@@ -85,7 +84,6 @@ impl ExchangeBuilder {
             resp_body,
             started_at: self.started_at,
             duration_ms,
-            mode: self.mode,
             truncated: truncated || req_trunc || resp_trunc,
         }
     }
@@ -143,7 +141,6 @@ mod tests {
             req_headers: std::collections::HashMap::new(),
             req_body: vec![0u8; BODY_CAP + 1], // oversized request body
             started_at: 0,
-            mode: TapMode::Mitm,
         };
         let ex = builder.finish(200, std::collections::HashMap::new(), vec![1, 2, 3], 42, false);
         assert_eq!(ex.status, 200);

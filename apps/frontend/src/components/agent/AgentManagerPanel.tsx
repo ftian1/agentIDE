@@ -348,9 +348,12 @@ function MachineCard({
       ]).catch(() => {});
 
       // Build env using shared logic — includes model vars, auth key, __providers_json.
+      // Read fresh from store (not closure) so we always have the latest providers.
       const tool = (savedAgentTool as AgentKind) ?? 'claude';
       const cfg = agentConfigs[tool] ?? { authKey: '', workDir: '', argPresets: [], extraArgs: '', envModels: {}, extraEnv: [] };
-      const spawnEnv = buildSpawnEnv(tool, cfg, llmProviders, activeModel?.modelId);
+      const currentProviders = useLlmProviderStore.getState().providers;
+      const currentModel = useLlmProviderStore.getState().activeModel;
+      const spawnEnv = buildSpawnEnv(tool, cfg, currentProviders, currentModel?.modelId);
       // Merge TMPDIR for the remote user.
       spawnEnv.TMPDIR = `/home/${user}/tmp`;
       spawnEnv.TMP = `/home/${user}/tmp`;
@@ -693,7 +696,9 @@ function ConnectView({
         appendLog(`Starting ${AGENT_KIND_LABELS[agentTool] ?? agentTool}...`);
       }
       const cfg = agentConfigs[agentTool] ?? { authKey: '', workDir: '', argPresets: [], extraArgs: '', envModels: {}, extraEnv: [] };
-      const spawnEnv = buildSpawnEnv(agentTool, cfg, llmProviders, activeModel?.modelId);
+      const currentProviders = useLlmProviderStore.getState().providers;
+      const currentModel = useLlmProviderStore.getState().activeModel;
+      const spawnEnv = buildSpawnEnv(agentTool, cfg, currentProviders, currentModel?.modelId);
       spawnEnv.TMPDIR = `/home/${user}/tmp`;
       spawnEnv.TMP = `/home/${user}/tmp`;
       spawnEnv.TEMP = `/home/${user}/tmp`;

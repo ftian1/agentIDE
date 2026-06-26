@@ -77,20 +77,8 @@ fn parse_test_tap_proxy() -> Option<UpstreamProxy> {
 /// JSON to stdout before exiting.
 async fn run_tap_test(tap_mode: &str, upstream: Option<String>, timeout_secs: u64) -> anyhow::Result<()> {
     use shared_protocol::messages::ProtocolMessage;
-    use shared_protocol::types::TapMode;
 
-    let mode = match tap_mode {
-        "reverse" => TapMode::Reverse,
-        _ => TapMode::Mitm,
-    };
-    let upstream_host = upstream.or_else(|| {
-        if matches!(mode, TapMode::Reverse) {
-            Some("api.anthropic.com".to_string())
-        } else {
-            None
-        }
-    });
-
+    let upstream_host = upstream;
     let upstream_proxy = parse_test_tap_proxy();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ProtocolMessage>();
@@ -98,12 +86,10 @@ async fn run_tap_test(tap_mode: &str, upstream: Option<String>, timeout_secs: u6
     let handle = tap::proxy::start_session_proxy(
         "test-session".to_string(),
         tx.clone(),
-        mode.clone(),
         upstream_host.clone(),
         upstream_proxy.clone(),
         None, // gateway_provider
         None, // gateway_token
-        None, // gateway_mode
         None, // gateway_path_prefix
         Vec::new(), // providers (no model-based routing in test mode)
     )?;

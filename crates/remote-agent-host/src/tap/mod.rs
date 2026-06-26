@@ -1,6 +1,9 @@
 //! HTTP traffic tap: intercept and record the agent CLI's outbound HTTP(S).
 //!
-//! See [`proxy`] for the MITM/reverse proxy and [`ca`] for the leaf-cert CA.
+//! Uses MITM (CONNECT tunnel + TLS termination) to intercept all CLI HTTP
+//! traffic.  Injected env vars (`HTTP_PROXY` / `HTTPS_PROXY` + CA certs)
+//! redirect the CLI through the local proxy.  See [`proxy`] for the MITM
+//! proxy and [`ca`] for the leaf-cert CA.
 
 pub mod ca;
 pub mod proxy;
@@ -8,7 +11,7 @@ pub mod record;
 
 use std::collections::HashMap;
 
-use shared_protocol::types::{ProviderConfig, TapMode, ToolKind};
+use shared_protocol::types::ProviderConfig;
 
 /// Env keys used to configure the tap (set by the desktop, stripped before spawn).
 pub const ENV_ENABLED: &str = "__tap_enabled";
@@ -22,14 +25,9 @@ pub const ENV_GW_MODE: &str = "__gateway_mode";
 /// Provider configs in JSON (model-based routing), set by the frontend.
 pub const ENV_PROVIDERS_JSON: &str = "__providers_json";
 
-/// Claude-CLI-only: set to dummy so it doesn't block on /login prompt
-/// when ANTHROPIC_BASE_URL points to a non-Anthropic endpoint.
-pub const ANTHROPIC_AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
-
 /// Tap configuration parsed from the spawn env map.
 pub struct TapConfig {
     pub enabled: bool,
-    pub mode: TapMode,
     /// Third-party provider routing (former gateway).
     pub gateway_provider: Option<String>,
     pub gateway_token: Option<String>,
@@ -46,7 +44,7 @@ impl TapConfig {
             .remove(ENV_ENABLED)
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
-        let explicit_mode = env.remove(ENV_MODE);
+        let _explicit_mode = env.remove(ENV_MODE);
         let gateway_provider = env.remove(ENV_GW_PROVIDER).filter(|v| !v.is_empty());
         let gateway_token = env.remove(ENV_GW_TOKEN).filter(|v| !v.is_empty());
         let gateway_mode = env.remove(ENV_GW_MODE).or_else(|| Some("passthrough".into()));
@@ -59,36 +57,13 @@ impl TapConfig {
             .unwrap_or_default();
         let has_providers = !providers.is_empty();
 
-        // When a third-party gateway is configured, default to Reverse mode
-        // so that ANTHROPIC_BASE_URL is injected and the CLI routes through
-        // our local proxy (which prepends the gateway path prefix, e.g. /anthropic).
-        // Providers also default to Reverse mode for model-based routing.
-        let mode = if gateway_provider.is_some() || gateway_token.is_some() || has_providers {
-            match explicit_mode.as_deref() {
-                Some("mitm") => TapMode::Mitm,
-                _ => TapMode::Reverse,  // default for gateway / providers
-            }
-        } else {
-            match explicit_mode.as_deref() {
-                Some("reverse") => TapMode::Reverse,
-                _ => TapMode::Mitm,     // default for plain tap (no gateway)
-            }
-        };
-        TapConfig { enabled: enabled || gateway_token.is_some() || has_providers, mode, gateway_provider, gateway_token, gateway_mode, providers }
-    }
-}
-
-/// Check if this provider supports Anthropic format natively (passthrough)
-/// vs needing OpenAI translation.
-pub fn supports_anthropic_native(provider: &str) -> bool {
-    provider.eq_ignore_ascii_case("copilot")
-}
-
-/// Default reverse-mode upstream host for a given tool.
-pub fn reverse_upstream_for(tool: &ToolKind) -> &'static str {
-    match tool {
-        ToolKind::Claude => "api.anthropic.com",
-        _ => "api.githubcopilot.com",
+        TapConfig {
+            enabled: enabled || gateway_token.is_some() || has_providers,
+            gateway_provider,
+            gateway_token,
+            gateway_mode,
+            providers,
+        }
     }
 }
 
@@ -176,83 +151,23 @@ mod tests {
     }
 }
 
-/// Build the env vars to inject so the CLI routes through the tap proxy.
-///
-/// In **Reverse** mode the CLI base URL is redirected to
-/// `http://127.0.0.1:{port}` and a dummy auth value is set so the CLI does
-/// NOT block on /login or credential checks.  The proxy injects the real
-/// credentials + upstream URL per-request based on model-id matching.
-///
-/// Only the env vars relevant to the specific `tool` are set — we no longer
-/// flood every CLI with unrelated vars.
-pub fn proxy_env(
-    mode: &TapMode,
-    port: u16,
-    ca_pem_path: &std::path::Path,
-    tool: &ToolKind,
-) -> Vec<(String, String)> {
+/// Build the env vars to inject so the CLI routes through the MITM tap proxy.
+/// Sets HTTP_PROXY / HTTPS_PROXY + CA cert paths so every CLI (regardless of
+/// which HTTP library it uses) routes its traffic through the local proxy.
+pub fn proxy_env(port: u16, ca_pem_path: &std::path::Path) -> Vec<(String, String)> {
     let endpoint = format!("http://127.0.0.1:{port}");
-    match mode {
-        TapMode::Mitm => {
-            let ca = ca_pem_path.to_string_lossy().to_string();
-            vec![
-                ("HTTP_PROXY".into(), endpoint.clone()),
-                ("http_proxy".into(), endpoint.clone()),
-                ("HTTPS_PROXY".into(), endpoint.clone()),
-                ("https_proxy".into(), endpoint.clone()),
-                ("ALL_PROXY".into(), endpoint.clone()),
-                ("all_proxy".into(), endpoint),
-                ("NODE_EXTRA_CA_CERTS".into(), ca.clone()),
-                ("REQUESTS_CA_BUNDLE".into(), ca.clone()),
-                ("SSL_CERT_FILE".into(), ca),
-                ("NO_PROXY".into(), String::new()),
-                ("no_proxy".into(), String::new()),
-            ]
-        }
-        TapMode::Reverse => reverse_vars(tool, &endpoint),
-    }
-}
-
-/// Per-tool env vars for Reverse mode.  Only sets what the specific CLI needs.
-fn reverse_vars(tool: &ToolKind, endpoint: &str) -> Vec<(String, String)> {
-    match tool {
-        // ── Claude Code ──────────────────────────────────────────
-        // Only ANTHROPIC_AUTH_TOKEN=dummy is needed; Claude Code
-        // uses this (not ANTHROPIC_API_KEY) when BASE_URL points
-        // to a non-Anthropic endpoint, skipping the /login prompt.
-        // ANTHROPIC_API_KEY is only set in passthrough mode (by the
-        // frontend) when the user provides their own API key.
-        ToolKind::Claude => vec![
-            ("ANTHROPIC_BASE_URL".into(), endpoint.into()),
-            (ANTHROPIC_AUTH_TOKEN.into(), "dummy".into()),
-        ],
-
-        // ── GitHub Copilot CLI ───────────────────────────────────
-        ToolKind::Copilot => vec![
-            ("COPILOT_PROVIDER_BASE_URL".into(), endpoint.into()),
-            ("COPILOT_PROVIDER_API_KEY".into(), "dummy".into()),
-            ("COPILOT_PROVIDER_TYPE".into(), "openai".into()),
-            ("COPILOT_OFFLINE".into(), "true".into()),
-        ],
-
-        // ── Custom / third-party CLIs ────────────────────────────
-        // Most of these speak OpenAI-compatible HTTP (OpenCode, Codex,
-        // Hermes with OpenAI backends, etc.), so default to
-        // OPENAI_BASE_URL + OPENAI_API_KEY=dummy.  Gemini is an
-        // exception: it reads GEMINI_API_KEY and may not support
-        // OPENAI_BASE_URL override.
-        ToolKind::Custom(name) => {
-            let name = name.as_str();
-            if name.eq_ignore_ascii_case("gemini") {
-                vec![("GEMINI_API_KEY".into(), "dummy".into())]
-            } else {
-                // opencode / codex / hermes / … — OpenAI-compatible
-                vec![
-                    ("OPENAI_BASE_URL".into(), endpoint.into()),
-                    ("OPENAI_API_BASE".into(), endpoint.into()),
-                    ("OPENAI_API_KEY".into(), "dummy".into()),
-                ]
-            }
-        }
-    }
+    let ca = ca_pem_path.to_string_lossy().to_string();
+    vec![
+        ("HTTP_PROXY".into(), endpoint.clone()),
+        ("http_proxy".into(), endpoint.clone()),
+        ("HTTPS_PROXY".into(), endpoint.clone()),
+        ("https_proxy".into(), endpoint.clone()),
+        ("ALL_PROXY".into(), endpoint.clone()),
+        ("all_proxy".into(), endpoint),
+        ("NODE_EXTRA_CA_CERTS".into(), ca.clone()),
+        ("REQUESTS_CA_BUNDLE".into(), ca.clone()),
+        ("SSL_CERT_FILE".into(), ca),
+        ("NO_PROXY".into(), String::new()),
+        ("no_proxy".into(), String::new()),
+    ]
 }

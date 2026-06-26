@@ -233,16 +233,6 @@ pub enum ApprovalDecision {
     Reject,
 }
 
-/// How the HTTP tap captured an exchange.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TapMode {
-    /// Forward proxy with TLS man-in-the-middle (HTTPS_PROXY + injected CA).
-    Mitm,
-    /// Reverse proxy via base-URL injection (no TLS interception).
-    Reverse,
-}
-
 /// A single captured HTTP request/response exchange from the agent CLI.
 ///
 /// Bodies are captured up to a cap (see the tap proxy); `truncated` marks
@@ -268,7 +258,6 @@ pub struct HttpExchange {
     /// Unix epoch millis when the request started.
     pub started_at: u64,
     pub duration_ms: u64,
-    pub mode: TapMode,
     /// True if either body was truncated at the capture cap.
     pub truncated: bool,
 }

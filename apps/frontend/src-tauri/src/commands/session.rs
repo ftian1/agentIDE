@@ -384,7 +384,7 @@ pub async fn connection_demux_relay(
                     resp_headers: serde_json::to_value(&exchange.resp_headers).unwrap_or_default(),
                     resp_body: exchange.resp_body.clone(),
                     duration_ms: exchange.duration_ms as i64,
-                    mode: serde_json::to_string(&exchange.mode).unwrap_or_default().trim_matches('"').to_string(),
+                    mode: "mitm".to_string(),
                     truncated: exchange.truncated,
                 });
                 let _ = app_handle.emit("http:traffic", evt);

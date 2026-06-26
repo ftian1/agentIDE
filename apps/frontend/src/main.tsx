@@ -9,6 +9,7 @@ import { initAgentListeners } from './stores/agentStore';
 import { initAgentLogListeners } from './stores/agentLogStore';
 import { initPerfListeners } from './stores/perfStore';
 import { initHttpTrafficListeners } from './stores/httpTrafficStore';
+import { initFileTreeListeners } from './stores/fileTreeCacheStore';
 
 // The window is created visible with a dark native backgroundColor (#0d1117),
 // which alone prevents the white WebView2 cold-start flash. We deliberately do
@@ -31,6 +32,7 @@ safeInit('agent', initAgentListeners);
 safeInit('agentLog', initAgentLogListeners);
 safeInit('perf', initPerfListeners);
 safeInit('httpTraffic', initHttpTrafficListeners);
+safeInit('fileTreeCache', initFileTreeListeners);
 
 // Load persisted config from SQLite (async, non-blocking).
 import('./stores/layoutStore').then(({ useLayoutStore }) => { useLayoutStore.getState()._init(); });

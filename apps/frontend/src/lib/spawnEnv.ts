@@ -4,12 +4,11 @@
  * regardless of which UI path launches the session.
  */
 import type { AgentKind, AgentEngineConfig } from '../stores/agentEngineStore';
-import type { LlmProvider } from '../stores/llmProviderStore';
+import type { LlmProvider, ProviderKind } from '../stores/llmProviderStore';
 
 /**
- * Auth environment variable injected for each agent CLI when the user provides
- * a direct API key via agent settings.  The key value is taken from
- * `AgentEngineConfig.authKey` and set as this env var on the remote CLI process.
+ * Auth environment variable injected for each agent CLI in passthrough mode
+ * (user provides a direct API key via agent settings).
  */
 export const AGENT_AUTH_ENV: Record<AgentKind, string> = {
   claude: 'ANTHROPIC_API_KEY',
@@ -38,6 +37,14 @@ const AGENT_MODEL_ENV: Partial<Record<AgentKind, string>> = {
   hermes: 'HERMES_MODEL',
 };
 
+/**
+ * Anthropic-compatible API endpoint path prefix for non-Anthropic providers.
+ * Mirrors `provider_path_prefix` in crates/remote-agent-host/src/tap/mod.rs.
+ */
+const ANTHROPIC_PATH_PREFIX: Partial<Record<ProviderKind, string>> = {
+  deepseek: '/anthropic',
+};
+
 /** Pick a model ID to tell the CLI to use when in provider-routing mode. */
 function resolveModel(
   agent: AgentKind,
@@ -58,37 +65,37 @@ function resolveModel(
   return null;
 }
 
+/** Construct the Anthropic-compatible base URL for a provider. */
+function anthropicBaseUrl(p: LlmProvider): string {
+  const prefix = ANTHROPIC_PATH_PREFIX[p.kind];
+  if (!prefix) return p.baseUrl;
+  const m = p.baseUrl.match(/^(https?:\/\/[^/]+)/);
+  return `${m ? m[1] : p.baseUrl}${prefix}`;
+}
+
+/** Find the provider that owns the given model ID. */
+function findProviderForModel(modelId: string, providers: LlmProvider[]): LlmProvider | undefined {
+  return providers.find((p) => p.models.some((m) => m.id === modelId));
+}
+
 /**
  * Build the full environment map to send with a SpawnSession request.
  *
- * Two auth modes (both available for every agent type):
+ * Two auth modes:
  *
- *  1. **Passthrough** (CLI auth key set):
- *     The agent-specific auth env var (ANTHROPIC_API_KEY /
- *     GEMINI_API_KEY / …) is set to the user's real key.  The remote
- *     proxy captures but does NOT modify auth or routing — the CLI
- *     talks directly to its default upstream with the user's key.
+ *  1. **Passthrough** (authKey set):
+ *     The agent-specific auth env var (ANTHROPIC_API_KEY / GEMINI_API_KEY /
+ *     …) is set to the user's real key.  The CLI connects to its default
+ *     upstream through the MITM proxy; the proxy records but does not
+ *     modify auth or routing.
  *
- *  2. **Provider routing** (no auth key, LLM providers configured):
- *     All providers with credentials are serialised into
- *     `__providers_json`.  On the remote host this triggers the
- *     unified HTTP proxy which:
- *       - starts in Reverse mode
- *       - injects every known base-URL env var
- *         (ANTHROPIC_BASE_URL / OPENAI_BASE_URL /
- *          COPILOT_PROVIDER_BASE_URL / …) pointing to itself
- *       - sets dummy auth tokens so no CLI blocks on /login
- *       - parses `model` from each request body and routes to the
- *         matching provider's upstream with its real credentials
- *
- *     Additionally, the active model ID is passed to the CLI via the
- *     agent-specific model env var (e.g. COPILOT_MODEL, OPENAI_MODEL)
- *     so the CLI sends requests for a model the proxy can match.
- *
- *     The proxy approach works uniformly across Claude Code, GitHub
- *     Copilot CLI, OpenCode, Codex, Hermes, and Gemini CLI — each
- *     finds its own base-URL env var redirected to the proxy and
- *     the proxy handles the rest.
+ *  2. **Provider routing** (no authKey, LLM providers configured):
+ *     Providers are serialised into `__providers_json` so the remote
+ *     proxy can route by model.  For Claude Code CLI, ANTHROPIC_BASE_URL
+ *     points the CLI at the provider's Anthropic-compatible endpoint
+ *     and ANTHROPIC_AUTH_TOKEN carries the provider's API key — the CLI
+ *     talks directly to the correct upstream through the MITM proxy,
+ *     which intercepts and can reroute if a different model matches.
  */
 export function buildSpawnEnv(
   agent: AgentKind,
@@ -117,28 +124,54 @@ export function buildSpawnEnv(
     env[AGENT_AUTH_ENV[agent]] = cliAuthKey;
   } else {
     // ── Mode 2: Provider routing (all agents via unified proxy) ─────
-    const providerConfigs = providers
-      .filter((p) => p.apiKey || p.copilotToken)
-      .map((p) => ({
-        id: p.id,
-        kind: p.kind,
-        label: p.label,
-        baseUrl: p.baseUrl,
-        apiKey: p.apiKey,
-        copilotToken: p.copilotToken,
-        modelIds: p.models.map((m) => m.id),
-      }));
+    const credProviders = providers.filter((p) => p.apiKey || p.copilotToken);
+    const providerConfigs = credProviders.map((p) => ({
+      id: p.id,
+      kind: p.kind,
+      label: p.label,
+      baseUrl: p.baseUrl,
+      apiKey: p.apiKey,
+      copilotToken: p.copilotToken,
+      modelIds: p.models.map((m) => m.id),
+    }));
     if (providerConfigs.length > 0) {
       env.__providers_json = JSON.stringify(providerConfigs);
 
-      // Tell the CLI which model to use — the proxy matches this
-      // model field against provider modelIds to route the request.
       const model = resolveModel(agent, providers, activeModelId);
       const modelEnv = AGENT_MODEL_ENV[agent];
       if (model && modelEnv) {
         env[modelEnv] = model;
       }
     }
+
+    // ── Claude Code CLI: point ANTHROPIC_BASE_URL at the provider ──
+    // In Mitm mode the CLI connects through HTTP_PROXY; setting
+    // ANTHROPIC_BASE_URL tells it to target the third-party endpoint
+    // directly instead of api.anthropic.com.  The proxy intercepts
+    // all traffic regardless of target host so model-based rerouting
+    // still works when a request's model field doesn't match.
+    if (agent === 'claude') {
+      const apiKeyProviders = providers.filter((p) => p.apiKey);
+      // Pick the provider whose model matches cfg.envModels, or
+      // activeModelId, or the first with an API key.
+      let pick: LlmProvider | undefined;
+      for (const modelId of Object.values(cfg.envModels)) {
+        if (!modelId) continue;
+        pick = findProviderForModel(modelId, apiKeyProviders);
+        if (pick) break;
+      }
+      if (!pick && activeModelId) {
+        pick = findProviderForModel(activeModelId, apiKeyProviders);
+      }
+      if (!pick && apiKeyProviders.length > 0) {
+        pick = apiKeyProviders[0];
+      }
+      if (pick) {
+        env.ANTHROPIC_BASE_URL = anthropicBaseUrl(pick);
+        env.ANTHROPIC_AUTH_TOKEN = pick.apiKey!;
+      }
+    }
+
   }
 
   return env;

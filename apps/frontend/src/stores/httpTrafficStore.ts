@@ -23,7 +23,7 @@ export interface HttpExchange {
   respBody: number[];
   startedAt: number;
   durationMs: number;
-  mode: 'mitm' | 'reverse';
+  mode: 'mitm';
   truncated: boolean;
 }
 

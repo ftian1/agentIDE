@@ -23,7 +23,7 @@ use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use shared_protocol::messages::ProtocolMessage;
-use shared_protocol::types::{ProviderConfig, TapMode};
+use shared_protocol::types::ProviderConfig;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::UnboundedSender;
@@ -51,15 +51,13 @@ impl Drop for ProxyHandle {
 struct ProxyState {
     session_id: String,
     transport_tx: UnboundedSender<ProtocolMessage>,
-    mode: TapMode,
-    /// Upstream host for reverse mode (e.g. "api.anthropic.com:443").
+    /// Fallback upstream host (e.g. "api.anthropic.com:443").
     upstream_host: Option<String>,
     /// Corporate forward-proxy for outbound connections (host:port).
     upstream_proxy: Option<UpstreamProxy>,
     /// Third-party provider routing (unified gateway).
     gateway_provider: Option<String>,
     gateway_token: Option<String>,
-    gateway_mode: Option<String>,
     /// Path prefix to prepend when forwarding (e.g. "/anthropic" for DeepSeek).
     gateway_path_prefix: Option<String>,
     /// Provider configs for model-based routing (from __providers_json).
@@ -93,16 +91,14 @@ fn build_client_config() -> Arc<ClientConfig> {
     Arc::new(cfg)
 }
 
-/// Start a tap proxy bound to an ephemeral 127.0.0.1 port.
+/// Start a Mitm tap proxy bound to an ephemeral 127.0.0.1 port.
 pub fn start_session_proxy(
     session_id: String,
     transport_tx: UnboundedSender<ProtocolMessage>,
-    mode: TapMode,
     upstream_host: Option<String>,
     upstream_proxy: Option<UpstreamProxy>,
     gateway_provider: Option<String>,
     gateway_token: Option<String>,
-    gateway_mode: Option<String>,
     gateway_path_prefix: Option<String>,
     providers: Vec<ProviderConfig>,
 ) -> anyhow::Result<ProxyHandle> {
@@ -132,12 +128,10 @@ pub fn start_session_proxy(
     let state = Arc::new(ProxyState {
         session_id,
         transport_tx,
-        mode,
         upstream_host,
         upstream_proxy,
         gateway_provider,
         gateway_token,
-        gateway_mode,
         gateway_path_prefix,
         providers,
         ca,
@@ -171,39 +165,27 @@ pub fn start_session_proxy(
         }
     });
 
-    tracing::info!(port, provider_count, "tap: proxy started");
+    tracing::info!(port, provider_count, "tap: Mitm proxy started");
     Ok(ProxyHandle { port, ca_pem_path, task })
 }
 
 async fn handle_conn(mut tcp: TcpStream, state: Arc<ProxyState>) -> anyhow::Result<()> {
-    match state.mode {
-        TapMode::Mitm => {
-            // Read the CONNECT request line + headers.
-            let target = read_connect_target(&mut tcp).await?;
-            let host = target.split(':').next().unwrap_or(&target).to_string();
-            tcp.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;
-            tcp.flush().await?;
+    // MITM: read CONNECT, respond 200, TLS-terminate with leaf cert.
+    let target = read_connect_target(&mut tcp).await?;
+    let host = target.split(':').next().unwrap_or(&target).to_string();
+    tcp.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n").await?;
+    tcp.flush().await?;
 
-            // TLS-terminate with a leaf cert for this host.
-            let leaf = state.ca.leaf_for(&host)?;
-            let leaf_key = leaf.key();
-            let mut server_cfg = ServerConfig::builder()
-                .with_no_client_auth()
-                .with_single_cert(leaf.chain, leaf_key)
-                .map_err(|e| anyhow::anyhow!("server cert: {e}"))?;
-            server_cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
-            let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
-            let tls = acceptor.accept(tcp).await?;
-            serve_http(TokioIo::new(tls), host, state).await
-        }
-        TapMode::Reverse => {
-            let host = state
-                .upstream_host
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("reverse mode without upstream host"))?;
-            serve_http(TokioIo::new(tcp), host, state).await
-        }
-    }
+    let leaf = state.ca.leaf_for(&host)?;
+    let leaf_key = leaf.key();
+    let mut server_cfg = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(leaf.chain, leaf_key)
+        .map_err(|e| anyhow::anyhow!("server cert: {e}"))?;
+    server_cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+    let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
+    let tls = acceptor.accept(tcp).await?;
+    serve_http(TokioIo::new(tls), host, state).await
 }
 
 /// Read bytes until the CONNECT header block terminator, return "host:port".
@@ -393,11 +375,18 @@ async fn forward(
         .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
         .and_then(|v| v.get("model")?.as_str().map(String::from));
 
+    let cli_auth_prefix = parts.headers.get(hyper::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| if v.len() > 16 { format!("{}...", &v[..16]) } else { v.to_string() });
+
     tracing::info!(
+        method = %method,
         path = %path,
+        target = %cli_upstream_hostname,
         model = ?model_id,
+        auth = ?cli_auth_prefix,
         provider_count = state.providers.len(),
-        "tap: incoming request"
+        "tap: ← CLI request"
     );
 
     // Determine routing: providers → model-based, else old gateway, else passthrough.
@@ -433,18 +422,43 @@ async fn forward(
             Some(r) => r,
             None if model_id.is_some() => {
                 // Model IS present in request but NOT found in any provider.
-                // This is a bug — dump the available models so we can fix it.
+                // Fall back to the first provider so the request is routed to
+                // a configured third-party endpoint rather than
+                // api.anthropic.com (which would 403 on the dummy auth token).
                 let model = model_id.as_deref().unwrap_or("?");
                 let all_models: Vec<String> = state.providers.iter()
                     .flat_map(|p| p.model_ids.iter().map(|m| format!("{}/{}", p.id, m)))
                     .collect();
-                tracing::error!(
+                tracing::warn!(
                     requested_model = %model,
                     available_models = ?all_models,
-                    "tap: MODEL MISMATCH — requested model not in any provider! Check provider modelIds config."
+                    "tap: MODEL MISMATCH — requested model not in provider modelIds; falling back to first provider"
                 );
-                // Passthrough: let it hit the upstream so the error is visible.
-                (cli_upstream_hostname.clone(), cli_upstream_port, String::new(), None)
+                state.providers.first()
+                    .and_then(|p| {
+                        let kind = &p.kind;
+                        let token = p.api_key.as_deref()
+                            .or_else(|| p.copilot_token.as_deref());
+                        let pp = crate::tap::provider_path_prefix(kind).unwrap_or("");
+                        let (host, port) = if kind == "copilot" {
+                            ("api.githubcopilot.com".to_string(), 443u16)
+                        } else {
+                            crate::tap::provider_upstream_host(&p.base_url)
+                                .unwrap_or_else(|| (cli_upstream_hostname.clone(), cli_upstream_port))
+                        };
+                        tracing::info!(
+                            provider_id = %p.id,
+                            provider_kind = %kind,
+                            upstream = %host,
+                            has_auth = token.is_some(),
+                            "tap: model mismatch → first provider"
+                        );
+                        Some((host, port, pp.to_string(), token.map(String::from)))
+                    })
+                    .unwrap_or_else(|| {
+                        tracing::error!("tap: model mismatch AND no providers configured — passthrough will fail");
+                        (cli_upstream_hostname.clone(), cli_upstream_port, String::new(), None)
+                    })
             }
             None => {
                 // No model field in request body (preflight / health-check).
@@ -503,7 +517,14 @@ async fn forward(
         (cli_upstream_hostname.clone(), cli_upstream_port, String::new(), None)
     };
 
-    let effective_url = format!("https://{effective_hostname}{path_prefix}{path}");
+    // If the CLI already targeted the Anthropic-compatible endpoint (e.g.
+    // ANTHROPIC_BASE_URL includes the /anthropic prefix), don't double-apply.
+    let effective_path = if !path_prefix.is_empty() && path.starts_with(&path_prefix) {
+        path.to_string()
+    } else {
+        format!("{path_prefix}{path}")
+    };
+    let effective_url = format!("https://{effective_hostname}{effective_path}");
 
     // Log the full routing decision for debugging.
     tracing::info!(
@@ -526,7 +547,6 @@ async fn forward(
         req_headers,
         req_body: req_body_bytes.to_vec(),
         started_at,
-        mode: state.mode.clone(),
     };
 
     // Open a connection to the effective upstream — either directly or
@@ -603,6 +623,31 @@ async fn forward(
         Ok(r) => r,
         Err(e) => return error_response(502, &format!("build upstream request: {e}")),
     };
+
+    // ── Log request before/after proxy modification ─────────────────
+    let host_changed = effective_hostname != cli_upstream_hostname;
+    let path_changed = !path_prefix.is_empty();
+    let auth_changed = auth_token.is_some();
+    let modified = host_changed || path_changed || auth_changed;
+
+    if modified {
+        tracing::info!(
+            method = %method,
+            cli_target = %cli_upstream_hostname,
+            upstream = %effective_hostname,
+            original_path = %log_url,
+            path_prefix = if path_prefix.is_empty() { "(none)" } else { &path_prefix },
+            auth_injected = auth_changed,
+            "tap: REQUEST MODIFIED → forwarding to upstream"
+        );
+    } else {
+        tracing::info!(
+            method = %method,
+            target = %effective_hostname,
+            path = %log_url,
+            "tap: REQUEST FORWARDED AS-IS (no modification)"
+        );
+    }
 
     let upstream_resp = match sender.send_request(up_req).await {
         Ok(r) => r,
