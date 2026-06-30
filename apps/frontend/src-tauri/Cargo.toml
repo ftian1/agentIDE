@@ -14,6 +14,7 @@ ssh = ["russh", "ssh-key", "base64", "shell-words"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+chrono = "0.4"
 
 [dependencies]
 shared-protocol = { path = "../../../crates/shared-protocol" }

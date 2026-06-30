@@ -6,9 +6,9 @@
  * input and window controls are outside it so clicks always reach them.
  */
 
-import { type ReactNode, useRef } from 'react';
+import { type ReactNode, useRef, useEffect } from 'react';
 import { ExternalLink, Minus, Square, X } from 'lucide-react';
-import type { Window } from '@tauri-apps/api/window';
+import { getCurrentWindow, type Window } from '@tauri-apps/api/window';
 import { MenuDropdown } from './MenuDropdown';
 import type { MenuItemSpec } from './MenuDropdown';
 import { GlobalSearch } from './GlobalSearch';
@@ -21,25 +21,21 @@ interface Props {
 
 export function MenuBar({ rightSlot }: Props) {
   const cmd = useMenuCommands();
-  const winRef = useRef<Window | null | undefined>(undefined);
+  const winRef = useRef<Window | null>(null);
 
-  // Lazy-init the window handle on first interaction.
-  async function getWin(): Promise<Window | null> {
-    if (winRef.current === undefined) {
-      try {
-        const { getCurrentWindow } = await import('@tauri-apps/api/window');
-        winRef.current = getCurrentWindow();
-      } catch {
-        winRef.current = null;
-      }
+  // Init Tauri window handle once on mount.
+  useEffect(() => {
+    try {
+      winRef.current = getCurrentWindow();
+    } catch (e) {
+      console.error('[MenuBar] getCurrentWindow failed:', e);
     }
-    return winRef.current;
-  }
+  }, []);
 
-  const handleMinimize = () => { getWin().then(w => w?.minimize()); };
-  const handleToggleMaximize = () => { getWin().then(w => w?.toggleMaximize()); };
-  const handleClose = () => { getWin().then(w => w?.close()); };
-  const handleDoubleClick = () => { getWin().then(w => w?.toggleMaximize()); };
+  const handleMinimize = () => { winRef.current?.minimize(); };
+  const handleToggleMaximize = () => { winRef.current?.toggleMaximize(); };
+  const handleClose = () => { winRef.current?.close(); };
+  const handleDoubleClick = () => { winRef.current?.toggleMaximize(); };
 
   const menus: { label: string; items: MenuItemSpec[] }[] = [
     {
