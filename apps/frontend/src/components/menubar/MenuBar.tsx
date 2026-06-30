@@ -1,11 +1,13 @@
 /**
  * MenuBar — top chrome: app title + 5 menus + centered global search.
+ * Also serves as the custom title bar (frameless window) with min/max/close.
  *
  * The right-side connection badge is injected by the caller (App.tsx) so this
  * stays decoupled from the connection store.
  */
 import type { ReactNode } from 'react';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, Minus, Square, X } from 'lucide-react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { MenuDropdown } from './MenuDropdown';
 import type { MenuItemSpec } from './MenuDropdown';
 import { GlobalSearch } from './GlobalSearch';
@@ -18,6 +20,8 @@ interface Props {
 
 export function MenuBar({ rightSlot }: Props) {
   const cmd = useMenuCommands();
+
+  const appWindow = getCurrentWindow();
 
   const menus: { label: string; items: MenuItemSpec[] }[] = [
     {
@@ -66,7 +70,11 @@ export function MenuBar({ rightSlot }: Props) {
   ];
 
   return (
-    <div className="h-9 flex items-center gap-1 px-2 bg-bg-secondary border-b border-border flex-shrink-0">
+    <div
+      data-tauri-drag-region
+      className="h-9 flex items-center gap-1 pl-2 pr-1 bg-bg-secondary border-b border-border flex-shrink-0 select-none"
+      onDoubleClick={() => appWindow.toggleMaximize()}
+    >
       <span className="text-xs font-semibold text-text-primary px-1 whitespace-nowrap">
         Remote AI IDE
       </span>
@@ -78,7 +86,32 @@ export function MenuBar({ rightSlot }: Props) {
         <GlobalSearch />
       </div>
 
-      <div className="flex items-center">{rightSlot}</div>
+      <div className="flex items-center gap-1">{rightSlot}</div>
+
+      {/* Window controls (frameless title bar) */}
+      <div className="flex items-center ml-1">
+        <button
+          onClick={() => appWindow.minimize()}
+          className="w-8 h-7 flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-tertiary rounded transition-colors"
+          aria-label="Minimize"
+        >
+          <Minus size={14} />
+        </button>
+        <button
+          onClick={() => appWindow.toggleMaximize()}
+          className="w-8 h-7 flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-tertiary rounded transition-colors"
+          aria-label="Maximize"
+        >
+          <Square size={12} />
+        </button>
+        <button
+          onClick={() => appWindow.close()}
+          className="w-8 h-7 flex items-center justify-center text-text-secondary hover:text-white hover:bg-red-500 rounded transition-colors"
+          aria-label="Close"
+        >
+          <X size={15} />
+        </button>
+      </div>
     </div>
   );
 }
