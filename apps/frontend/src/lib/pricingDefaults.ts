@@ -106,4 +106,4 @@ function validateAndExtract(data: unknown): ProviderPricingMap {
 export const DEFAULT_PRICING: ProviderPricingMap = validateAndExtract(pricingData);
 
 /** Pricing format version — must match pricing.json. */
-export const PRICING_FORMAT_VERSION = 1;
+export const PRICING_FORMAT_VERSION = 2;

@@ -285,7 +285,7 @@ function matchField(
       const tOp = op as TimeOfDayOp;
       if (ctx.startedAt === undefined || ctx.startedAt === 0) return false;
       const d = new Date(ctx.startedAt);
-      const minutes = d.getHours() * 60 + d.getMinutes();
+      const minutes = d.getUTCHours() * 60 + d.getUTCMinutes();
       const gte = timeStrToMinutes(tOp.gte);
       const lt = timeStrToMinutes(tOp.lt);
       if (gte !== undefined && minutes < gte) return false;
@@ -297,6 +297,19 @@ function matchField(
     case 'isBatch': {
       const eqOp = op as { eq?: boolean };
       return ctx.isBatch === !!eqOp.eq;
+    }
+
+    // ── Start date ───────────────────────────────────────────
+    // Gate overrides on a minimum UTC date. Format: { "gte": "2026-07-15" }
+    case 'startDate': {
+      const sOp = op as { gte?: string; lt?: string };
+      if (ctx.startedAt === undefined || ctx.startedAt === 0) return false;
+      const ts = ctx.startedAt;
+      const gteMs = dateStrToEpochMs(sOp.gte);
+      const ltMs = dateStrToEpochMs(sOp.lt);
+      if (gteMs !== undefined && ts < gteMs) return false;
+      if (ltMs !== undefined && ts >= ltMs) return false;
+      return true;
     }
 
     // ── Cache TTL ───────────────────────────────────────────
@@ -359,6 +372,14 @@ function timeStrToMinutes(s?: string): number | undefined {
   const parts = s.split(':').map(Number);
   if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) return undefined;
   return parts[0] * 60 + parts[1];
+}
+
+/** Parse "YYYY-MM-DD" as UTC midnight epoch milliseconds. */
+function dateStrToEpochMs(s?: string): number | undefined {
+  if (!s) return undefined;
+  // "YYYY-MM-DD" parsed as UTC — Date.parse treats it as UTC.
+  const ts = Date.parse(s + 'T00:00:00Z');
+  return isNaN(ts) ? undefined : ts;
 }
 
 function roundCents(n: number): number {

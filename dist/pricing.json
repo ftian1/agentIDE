@@ -1,7 +1,7 @@
 {
-  "version": 2,
-  "updatedAt": "2026-07-01",
-  "description": "LLM API pricing per 1M tokens (USD). Each model has base prices and optional conditional overrides evaluated in order (first match wins). Sources linked below.",
+  "version": 3,
+  "updatedAt": "2026-07-15",
+  "description": "LLM API pricing per 1M tokens (USD). Supports conditional overrides (time-of-day peak/valley, token thresholds, batch, cache TTL, start date). Sources linked below.",
   "sources": {
     "anthropic": "https://docs.anthropic.com/en/api/pricing",
     "openai": "https://platform.openai.com/docs/pricing",
@@ -261,28 +261,76 @@
       "inputPrice": 0.14,
       "outputPrice": 0.28,
       "cacheReadPrice": 0.014,
-      "cacheWritePrice": 0
+      "cacheWritePrice": 0,
+      "overrides": [
+        {
+          "name": "Peak pricing (UTC 1:00–4:00) — 2× base, from mid-July 2026",
+          "when": { "startDate": { "gte": "2026-07-15" }, "timeOfDay": { "gte": "01:00", "lt": "04:00" } },
+          "multiplier": 2
+        },
+        {
+          "name": "Peak pricing (UTC 6:00–10:00) — 2× base, from mid-July 2026",
+          "when": { "startDate": { "gte": "2026-07-15" }, "timeOfDay": { "gte": "06:00", "lt": "10:00" } },
+          "multiplier": 2
+        }
+      ]
     },
     "deepseek-chat": {
       "label": "DeepSeek Chat (→V4 Flash)",
       "inputPrice": 0.14,
       "outputPrice": 0.28,
       "cacheReadPrice": 0.014,
-      "cacheWritePrice": 0
+      "cacheWritePrice": 0,
+      "overrides": [
+        {
+          "name": "Peak pricing (UTC 1:00–4:00) — 2× base, from mid-July 2026",
+          "when": { "startDate": { "gte": "2026-07-15" }, "timeOfDay": { "gte": "01:00", "lt": "04:00" } },
+          "multiplier": 2
+        },
+        {
+          "name": "Peak pricing (UTC 6:00–10:00) — 2× base, from mid-July 2026",
+          "when": { "startDate": { "gte": "2026-07-15" }, "timeOfDay": { "gte": "06:00", "lt": "10:00" } },
+          "multiplier": 2
+        }
+      ]
     },
     "deepseek-reasoner": {
       "label": "DeepSeek Reasoner (→V4 Flash)",
       "inputPrice": 0.14,
       "outputPrice": 0.28,
       "cacheReadPrice": 0.014,
-      "cacheWritePrice": 0
+      "cacheWritePrice": 0,
+      "overrides": [
+        {
+          "name": "Peak pricing (UTC 1:00–4:00) — 2× base, from mid-July 2026",
+          "when": { "startDate": { "gte": "2026-07-15" }, "timeOfDay": { "gte": "01:00", "lt": "04:00" } },
+          "multiplier": 2
+        },
+        {
+          "name": "Peak pricing (UTC 6:00–10:00) — 2× base, from mid-July 2026",
+          "when": { "startDate": { "gte": "2026-07-15" }, "timeOfDay": { "gte": "06:00", "lt": "10:00" } },
+          "multiplier": 2
+        }
+      ]
     },
     "deepseek-v3": {
       "label": "DeepSeek V3 (legacy)",
       "inputPrice": 0.27,
       "outputPrice": 1.1,
       "cacheReadPrice": 0.028,
-      "cacheWritePrice": 0
+      "cacheWritePrice": 0,
+      "overrides": [
+        {
+          "name": "Peak pricing (UTC 1:00–4:00) — 2× base, from mid-July 2026",
+          "when": { "startDate": { "gte": "2026-07-15" }, "timeOfDay": { "gte": "01:00", "lt": "04:00" } },
+          "multiplier": 2
+        },
+        {
+          "name": "Peak pricing (UTC 6:00–10:00) — 2× base, from mid-July 2026",
+          "when": { "startDate": { "gte": "2026-07-15" }, "timeOfDay": { "gte": "06:00", "lt": "10:00" } },
+          "multiplier": 2
+        }
+      ]
     },
     "mistral-large": {
       "label": "Mistral Large",
