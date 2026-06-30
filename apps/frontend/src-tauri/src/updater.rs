@@ -164,13 +164,14 @@ async fn check_and_update(
                 continue;
             }
             if !managed.contains(name_str.as_ref()) {
-                tracing::info!("updater: removing stale file {}", name_str);
                 let path = entry.path();
+                // Extracted directories (e.g. frontend/) are managed by
+                // their parent tar.gz — don't sweep them.
                 if path.is_dir() {
-                    std::fs::remove_dir_all(&path).ok();
-                } else {
-                    std::fs::remove_file(&path).ok();
+                    continue;
                 }
+                tracing::info!("updater: removing stale file {}", name_str);
+                std::fs::remove_file(&path).ok();
             }
         }
     }
@@ -252,10 +253,13 @@ mod http {
             std::fs::write(&tmp, &bytes)?;
 
             if name.ends_with(".tar.gz") {
+                // Save the tarball first — it's the "managed" file checked
+                // for hash comparison on subsequent runs.
+                let final_path = cache_dir.join(&name);
+                std::fs::rename(&tmp, &final_path)?;
                 let frontend_dir = cache_dir.join("frontend");
                 std::fs::create_dir_all(&frontend_dir)?;
-                super::extract_tar_gz(&tmp, &frontend_dir)?;
-                std::fs::remove_file(&tmp).ok();
+                super::extract_tar_gz(&final_path, &frontend_dir)?;
                 tracing::info!("updater: extracted {} -> {}", name, frontend_dir.display());
             } else {
                 std::fs::rename(&tmp, cache_dir.join(&name))?;
@@ -378,10 +382,12 @@ mod http {
         }
 
         if name.ends_with(".tar.gz") {
+            // Save the tarball first for hash comparison on next runs.
+            let final_path = cache_dir.join(name);
+            std::fs::rename(&tmp, &final_path)?;
             let frontend_dir = cache_dir.join("frontend");
             std::fs::create_dir_all(&frontend_dir)?;
-            super::extract_tar_gz(&tmp, &frontend_dir)?;
-            std::fs::remove_file(&tmp).ok();
+            super::extract_tar_gz(&final_path, &frontend_dir)?;
             tracing::info!("updater: extracted {} -> {}", name, frontend_dir.display());
         } else {
             std::fs::rename(&tmp, cache_dir.join(name))?;
