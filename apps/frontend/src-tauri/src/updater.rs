@@ -183,11 +183,105 @@ async fn check_and_update(
 
 // ── Manifest fetch ──────────────────────────────────────────────────
 
+// ── Proxy-aware reqwest client ──────────────────────────────────────
+// Follows the same env + registry proxy detection as llm.rs, so the
+// updater works through corporate / China-network proxies.
+
+fn build_reqwest_client(timeout_secs: u64) -> anyhow::Result<reqwest::Client> {
+    let mut builder = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(timeout_secs))
+        .timeout(Duration::from_secs(timeout_secs));
+
+    if let Some(proxy_url) = detect_proxy_url() {
+        match reqwest::Proxy::all(&proxy_url) {
+            Ok(p) => {
+                tracing::info!(%proxy_url, "updater: using detected proxy");
+                builder = builder.proxy(p);
+                // Corporate proxies often TLS-intercept — accept their certs.
+                builder = builder.danger_accept_invalid_certs(true);
+            }
+            Err(e) => {
+                tracing::warn!(%proxy_url, error = %e, "updater: failed to parse proxy URL, continuing without");
+            }
+        }
+    } else {
+        tracing::info!("updater: no proxy detected");
+    }
+
+    Ok(builder.build()?)
+}
+
+/// Auto-detect the upstream proxy URL, checking:
+/// 1. Env vars (HTTPS_PROXY, https_proxy, HTTP_PROXY, http_proxy)
+/// 2. Windows IE/Edge proxy settings (registry)
+fn detect_proxy_url() -> Option<String> {
+    // 1. Env vars
+    for key in &["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+        if let Ok(val) = std::env::var(key) {
+            let val = val.trim().to_string();
+            if !val.is_empty() {
+                tracing::info!(key, %val, "updater: proxy from env");
+                return Some(val);
+            }
+        }
+    }
+
+    // 2. Windows system proxy (registry)
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(proxy) = detect_windows_proxy() {
+            tracing::info!(%proxy, "updater: proxy from winreg");
+            return Some(proxy);
+        }
+    }
+
+    None
+}
+
+/// Read the Windows IE/Edge proxy server from the registry.
+#[cfg(target_os = "windows")]
+fn detect_windows_proxy() -> Option<String> {
+    use winreg::enums::*;
+    let hkcu = winreg::RegKey::predef(HKEY_CURRENT_USER);
+    let key = match hkcu.open_subkey(
+        "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"
+    ) {
+        Ok(k) => k,
+        Err(_) => return None,
+    };
+    let enabled: u32 = key.get_value("ProxyEnable").unwrap_or(0);
+    if enabled == 0 {
+        return None;
+    }
+    let server: String = match key.get_value("ProxyServer") {
+        Ok(s) => s,
+        Err(_) => return None,
+    };
+    let server = server.trim().to_string();
+    if server.is_empty() {
+        return None;
+    }
+    // Format can be "host:port" or "http=host:port;https=host:port".
+    let url = if let Some(https_part) = server.split(';').find(|s| s.contains("https=")) {
+        https_part.trim_start_matches("https=").to_string()
+    } else if server.contains('=') {
+        server.split(';').next().unwrap_or(&server).split('=').nth(1).unwrap_or(&server).to_string()
+    } else {
+        server
+    };
+    let proxy_url = if url.contains("://") { url } else { format!("http://{url}") };
+    Some(proxy_url)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn detect_windows_proxy() -> Option<String> {
+    None
+}
+
+// ── Manifest fetch ──────────────────────────────────────────────────
+
 async fn fetch_manifest(cache_dir: &Path) -> anyhow::Result<Manifest> {
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
-        .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
-        .build()?;
+    let client = build_reqwest_client(FETCH_TIMEOUT_SECS)?;
 
     tracing::info!("updater: fetching manifest from {MANIFEST_URL}");
     let resp = client
@@ -223,10 +317,7 @@ async fn download_file(
         .unwrap_or_default();
     let url = format!("{base}{name}");
 
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
-        .timeout(Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
-        .build()?;
+    let client = build_reqwest_client(DOWNLOAD_TIMEOUT_SECS)?;
 
     let resp = client
         .get(&url)

@@ -1,12 +1,12 @@
 {
-  "version": "2026-06-30.b177f5b",
+  "version": "2026-06-30.a7951f4",
   "files": {
     "agent-linux-x86_64": {"sha256": "c5247b1bae3e2eb5893952fcee42758796c4d897483b3a47cbc8123ee277968e", "size": 3751192}    ,
     "agent-windows-x86_64": {"sha256": "ae8f121a5c5c36f1268e5d1165fb7c0fabbaabfaa157cb0c6b9aec4ac907b53b", "size": 3927552}    ,
     "frontend.tar.gz": {"sha256": "3881775bfe744cf2d6f15169188059fd63f0259299f45c8b5e89901f421fb4f7", "size": 4063756}    ,
     "loader-linux-x86_64": {"sha256": "06af3ae567aba39a6cd0291b7e6510101c569c97dc4aa4c1b872cf627bf56070", "size": 7016552}    ,
     "loader-windows-x86_64.exe": {"sha256": "c3e79328dc98d6514ac232c99d2afb13b7070cb7c6924d37b6bc6709f39dd17e", "size": 1319936}    ,
-    "main.exe": {"sha256": "4280b315d0aa6679078c67fbef407479ca80d34837e6bd8c49a795441656c686", "size": 21013504}    ,
+    "main.exe": {"sha256": "e91531eef446b0770850cf5e45a98f2c4e0d7584d47e03660301202cc1fbec07", "size": 21032448}    ,
     "pricing.json": {"sha256": "fbd252379aeeb4ca004304aeabe055b4073b944b7ff3a2a9749eabc070d2e81a", "size": 10473}
   }
 }
