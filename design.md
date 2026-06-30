@@ -940,6 +940,61 @@ Completions API 格式（`/v1/chat/completions`），不理解 Anthropic Message
 
 ---
 
+### 4.31 Windows 外网访问代理策略（2026-06-30）
+
+**问题**：Windows 客户端在中国网络环境下，`reqwest`（纯 Rust HTTP 栈）无法直连 GitHub
+（`raw.githubusercontent.com`）和境外 API。即使系统已配代理（VPN/企业），reqwest
+默认不会读取系统代理设置。OTA manifest fetch 和 pricing.json 运行时更新都因此失败。
+
+**方案**：双层代理策略 —— Windows 用系统 HTTP 栈（WinHTTP），非 Windows 用 reqwest + env var。
+
+**第一层：Windows → WinHTTP（`commands/winhttp.rs`）**
+
+`WinHttpOpen(WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY)` 让 OS 自动处理：
+- 系统代理检测（IE/Edge 设置、PAC 脚本、WPAD）
+- SSPI 认证（NTLM / Kerberos / Negotiate）— 无需手写认证握手
+- TLS 拦截容忍（`SECURITY_FLAG_IGNORE_*`）— 企业代理 MITM 证书
+
+调用方用 `tokio::task::spawn_blocking` 包装同步 WinHTTP 调用。
+
+**WinHTTP 使用场景（全部仅在 Windows）：**
+
+| 模块 | 功能 | 关键文件 |
+|------|------|---------|
+| LLM provider 请求 | device-code start/poll、fetch models | `commands/llm.rs` `mod http` (cfg windows) |
+| LLM chat 推理 | provider routing 的代理穿透 | `commands/llm.rs` `chat::http_post_stream` |
+| OTA 更新 | manifest 拉取 + 文件下载 | `updater.rs` `mod http` (cfg windows) |
+
+OTA 改 WinHTTP 后，`main.exe` 减小 ~2MB（无 reqwest/winreg 依赖）。
+
+**第二层：非 Windows → reqwest + env var**
+
+`build_reqwest_client()` 按顺序检查 `HTTPS_PROXY` / `https_proxy` / `HTTP_PROXY` /
+`http_proxy` 环境变量。非 Windows 无需 WinHTTP（无 SSPI 体系），env var 是最简方案。
+
+```rust
+// updater.rs — 非 Windows 路径
+fn detect_proxy_url() -> Option<String> {
+    for key in &["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+        if let Ok(val) = std::env::var(key) {
+            if !val.trim().is_empty() { return Some(val.trim().into()); }
+        }
+    }
+    None
+}
+```
+
+**取舍：**
+- WinHTTP 不需手写 SSPI / NTLM 握手，比引入 `sspi` 箱更简单可靠
+- WinHTTP 同步 + `spawn_blocking` → tokio 线程池承载，不阻塞 UI
+- `windows-sys` 箱已由其他依赖间接引入，无新增版本
+- 非 Windows 的 env var 方案简单，覆盖 Linux/macOS 开发场景
+- 不再依赖 reqwest/winreg 做代理检测（Windows 上用不到，非 Windows 上 env var 足矣）
+
+**关键文件：** `commands/winhttp.rs`、`commands/llm.rs`（`mod http`）、`updater.rs`（`mod http`）、`Cargo.toml`
+
+---
+
 ### 4.30 视觉交互层数据源设计：HTTP Proxy 流量解析
 
 **决策：不使用 `--output-format stream-json`（NDJSON），改用 HTTP Proxy 的 SSE 流量作为结构化数据源。**
