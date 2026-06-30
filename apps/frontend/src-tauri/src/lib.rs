@@ -539,6 +539,9 @@ pub fn run() {
             commands::restart::prepare_restart,
             commands::restart::check_restart_flag,
             commands::restart::apply_update_and_restart,
+            commands::window::minimize_window,
+            commands::window::toggle_maximize_window,
+            commands::window::close_window,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

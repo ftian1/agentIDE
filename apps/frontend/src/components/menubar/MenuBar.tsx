@@ -2,40 +2,29 @@
  * MenuBar — top chrome: app title + 5 menus + centered global search.
  * Also serves as the custom title bar (frameless window) with min/max/close.
  *
- * The drag region covers only the logo + menus (left portion); the search
- * input and window controls are outside it so clicks always reach them.
+ * Window controls use Tauri invoke() commands (not @tauri-apps/api/window)
+ * for maximum reliability across all webview environments.
  */
 
-import { type ReactNode, useRef, useEffect } from 'react';
+import type { ReactNode } from 'react';
 import { ExternalLink, Minus, Square, X } from 'lucide-react';
-import { getCurrentWindow, type Window } from '@tauri-apps/api/window';
+import { invoke } from '@tauri-apps/api/core';
 import { MenuDropdown } from './MenuDropdown';
 import type { MenuItemSpec } from './MenuDropdown';
 import { GlobalSearch } from './GlobalSearch';
 import { useMenuCommands } from '../../hooks/useMenuCommands';
 
 interface Props {
-  /** Right-aligned slot (e.g. <ConnectionBadge/>). */
   rightSlot?: ReactNode;
 }
 
 export function MenuBar({ rightSlot }: Props) {
   const cmd = useMenuCommands();
-  const winRef = useRef<Window | null>(null);
 
-  // Init Tauri window handle once on mount.
-  useEffect(() => {
-    try {
-      winRef.current = getCurrentWindow();
-    } catch (e) {
-      console.error('[MenuBar] getCurrentWindow failed:', e);
-    }
-  }, []);
-
-  const handleMinimize = () => { winRef.current?.minimize(); };
-  const handleToggleMaximize = () => { winRef.current?.toggleMaximize(); };
-  const handleClose = () => { winRef.current?.close(); };
-  const handleDoubleClick = () => { winRef.current?.toggleMaximize(); };
+  const handleMinimize = () => invoke('minimize_window');
+  const handleToggleMaximize = () => invoke('toggle_maximize_window');
+  const handleClose = () => invoke('close_window');
+  const handleDoubleClick = () => invoke('toggle_maximize_window');
 
   const menus: { label: string; items: MenuItemSpec[] }[] = [
     {
@@ -85,7 +74,7 @@ export function MenuBar({ rightSlot }: Props) {
 
   return (
     <div className="h-9 flex items-center gap-1 pl-2 pr-1 bg-bg-secondary border-b border-border flex-shrink-0 select-none">
-      {/* Drag region: logo + menus (left portion) */}
+      {/* Drag region: logo + menus */}
       <div
         data-tauri-drag-region
         className="flex items-center gap-1 h-full"
@@ -99,35 +88,21 @@ export function MenuBar({ rightSlot }: Props) {
         ))}
       </div>
 
-      {/* Search (non-drag so input always works) */}
       <div className="flex-1 flex justify-center px-4">
         <GlobalSearch />
       </div>
 
-      {/* Right slot (connection badge etc.) */}
       <div className="flex items-center gap-1">{rightSlot}</div>
 
-      {/* Window controls — outside drag region, always clickable */}
+      {/* Window controls */}
       <div className="flex items-center ml-1">
-        <button
-          onClick={handleMinimize}
-          className="w-8 h-7 flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-tertiary rounded transition-colors"
-          aria-label="Minimize"
-        >
+        <button onClick={handleMinimize} className="w-8 h-7 flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-tertiary rounded transition-colors" aria-label="Minimize">
           <Minus size={14} />
         </button>
-        <button
-          onClick={handleToggleMaximize}
-          className="w-8 h-7 flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-tertiary rounded transition-colors"
-          aria-label="Maximize"
-        >
+        <button onClick={handleToggleMaximize} className="w-8 h-7 flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-tertiary rounded transition-colors" aria-label="Maximize">
           <Square size={12} />
         </button>
-        <button
-          onClick={handleClose}
-          className="w-8 h-7 flex items-center justify-center text-text-secondary hover:text-white hover:bg-red-500 rounded transition-colors"
-          aria-label="Close"
-        >
+        <button onClick={handleClose} className="w-8 h-7 flex items-center justify-center text-text-secondary hover:text-white hover:bg-red-500 rounded transition-colors" aria-label="Close">
           <X size={15} />
         </button>
       </div>

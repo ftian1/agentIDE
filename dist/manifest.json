@@ -1,5 +1,5 @@
 {
-  "version": "2026-06-30.4bd98b7",
+  "version": "2026-06-30.1ca1735",
   "files": {
     "agent-linux-x86_64": {
       "sha256": "c5247b1bae3e2eb5893952fcee42758796c4d897483b3a47cbc8123ee277968e",
@@ -10,16 +10,16 @@
       "size": 3927552
     },
     "frontend.tar.gz": {
-      "sha256": "f303c7480e2014dafc292ca09985ec5edcb3bc40fcf03ad299627fb9c9a55143",
-      "size": 4070538
+      "sha256": "95cc45e90df2719c938beb0dbf9463e7e599fa9d309260aebcb53baed76c8b31",
+      "size": 4065691
     },
     "pricing.json": {
       "sha256": "fbd252379aeeb4ca004304aeabe055b4073b944b7ff3a2a9749eabc070d2e81a",
       "size": 10473
     },
     "loader.exe": {
-      "sha256": "538bb21fb0d7720a0cbb7b33c4bc1e87b4158219d478c92789d3e4894b7c4317",
-      "size": 23536640
+      "sha256": "5b31d5b003824861cdf0b585edd34fd049759808ad5b0a02dcd7b91769b1ea82",
+      "size": 23539200
     }
   }
 }
