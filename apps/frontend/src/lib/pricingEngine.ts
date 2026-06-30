@@ -18,9 +18,12 @@
 
 import {
   DEFAULT_PRICING,
+  DEFAULT_PROVIDER_GROUPS,
   PRICING_FORMAT_VERSION,
+  parsePricingData,
   type PricingEntry,
   type PriceOverride,
+  type ProviderGroup,
   type ProviderPricingMap,
 } from './pricingDefaults';
 import type { TokenUsage } from './usageParser';
@@ -75,11 +78,13 @@ interface PricingCache {
   fetchedAt: number;
   url: string;
   models: ProviderPricingMap;
+  providerGroups?: ProviderGroup[];
 }
 
 // ── State ───────────────────────────────────────────────────────────
 
 let activePricing: ProviderPricingMap = { ...DEFAULT_PRICING };
+let activeProviderGroups: ProviderGroup[] = [...DEFAULT_PROVIDER_GROUPS];
 let initialized = false;
 
 // ── Public API ──────────────────────────────────────────────────────
@@ -91,14 +96,22 @@ export async function initPricingEngine(pricingUrl?: string): Promise<void> {
 
   const cached = loadCachedPricing();
   if (cached) {
-    activePricing = { ...DEFAULT_PRICING, ...cached };
+    activePricing = { ...DEFAULT_PRICING, ...cached.models };
+    if (cached.providerGroups && cached.providerGroups.length > 0) {
+      activeProviderGroups = cached.providerGroups;
+    }
   }
 
   fetchAndCachePricing(url)
     .then((ok) => {
       if (ok) {
         const fresh = loadCachedPricing();
-        if (fresh) activePricing = { ...DEFAULT_PRICING, ...fresh };
+        if (fresh) {
+          activePricing = { ...DEFAULT_PRICING, ...fresh.models };
+          if (fresh.providerGroups && fresh.providerGroups.length > 0) {
+            activeProviderGroups = fresh.providerGroups;
+          }
+        }
       }
     })
     .catch(() => {});
@@ -161,12 +174,22 @@ export function getActivePricing(): ProviderPricingMap {
   return activePricing;
 }
 
+/** Provider groups for UI display (label + model IDs per provider). */
+export function getProviderGroups(): ProviderGroup[] {
+  return activeProviderGroups;
+}
+
 export async function refreshPricing(pricingUrl?: string): Promise<boolean> {
   const url = pricingUrl || DEFAULT_PRICING_URL;
   const ok = await fetchAndCachePricing(url);
   if (ok) {
     const fresh = loadCachedPricing();
-    if (fresh) activePricing = { ...DEFAULT_PRICING, ...fresh };
+    if (fresh) {
+      activePricing = { ...DEFAULT_PRICING, ...fresh.models };
+      if (fresh.providerGroups && fresh.providerGroups.length > 0) {
+        activeProviderGroups = fresh.providerGroups;
+      }
+    }
   }
   return ok;
 }
@@ -388,14 +411,14 @@ function roundCents(n: number): number {
 
 // ── Cache & fetch ─────────────────────────────────────────────────
 
-function loadCachedPricing(): ProviderPricingMap | null {
+function loadCachedPricing(): PricingCache | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     const cache: PricingCache = JSON.parse(raw);
     if (cache.version !== PRICING_FORMAT_VERSION) return null;
     if (Date.now() - cache.fetchedAt > CACHE_TTL_MS) return null;
-    return cache.models;
+    return cache;
   } catch {
     return null;
   }
@@ -417,56 +440,16 @@ async function fetchAndCachePricing(url: string): Promise<boolean> {
     if (!resp.ok) return false;
 
     const json: unknown = await resp.json();
-    const root = json as Record<string, unknown>;
-    if (!root || !root.models) return false;
+    const parsed = parsePricingData(json);
 
-    const models = root.models as Record<string, unknown>;
-    if (!models || Object.keys(models).length === 0) return false;
-
-    // Validate model entries.
-    const validated: ProviderPricingMap = {};
-    for (const [key, val] of Object.entries(models)) {
-      const m = val as Record<string, unknown> | null;
-      if (!m || typeof m.label !== 'string') continue;
-      if (
-        (m.inputPrice as number) === 0 &&
-        (m.outputPrice as number) === 0 &&
-        (m.cacheReadPrice as number) === 0 &&
-        (m.cacheWritePrice as number) === 0
-      )
-        continue;
-
-      const entry: PricingEntry = {
-        label: m.label as string,
-        inputPrice: typeof m.inputPrice === 'number' ? m.inputPrice : 0,
-        outputPrice: typeof m.outputPrice === 'number' ? m.outputPrice : 0,
-        cacheReadPrice: typeof m.cacheReadPrice === 'number' ? m.cacheReadPrice : 0,
-        cacheWritePrice: typeof m.cacheWritePrice === 'number' ? m.cacheWritePrice : 0,
-      };
-
-      const rawOverrides = m.overrides as Array<Record<string, unknown>> | undefined;
-      if (Array.isArray(rawOverrides) && rawOverrides.length > 0) {
-        entry.overrides = rawOverrides.map((ov, i) => ({
-          name: (ov.name as string) ?? `override-${i}`,
-          when: (ov.when as Record<string, unknown>) ?? {},
-          inputPrice: ov.inputPrice as number | undefined,
-          outputPrice: ov.outputPrice as number | undefined,
-          cacheReadPrice: ov.cacheReadPrice as number | undefined,
-          cacheWritePrice: ov.cacheWritePrice as number | undefined,
-          multiplier: ov.multiplier as number | undefined,
-        }));
-      }
-
-      validated[key] = entry;
-    }
-
-    if (Object.keys(validated).length === 0) return false;
+    if (Object.keys(parsed.models).length === 0) return false;
 
     const cache: PricingCache = {
       version: PRICING_FORMAT_VERSION,
       fetchedAt: Date.now(),
       url,
-      models: validated,
+      models: parsed.models,
+      providerGroups: parsed.providerGroups.length > 0 ? parsed.providerGroups : undefined,
     };
 
     localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
