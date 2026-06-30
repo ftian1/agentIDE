@@ -20,7 +20,7 @@ const MANIFEST_URL: &str =
 /// Wait this long after startup before the first check, so the UI has time to load.
 const INITIAL_DELAY_SECS: u64 = 10;
 /// Interval between subsequent manifest checks.
-const CHECK_INTERVAL_SECS: u64 = 1800; // 30 minutes
+const CHECK_INTERVAL_SECS: u64 = 3; // 3 seconds
 const FETCH_TIMEOUT_SECS: u64 = 15;
 const DOWNLOAD_TIMEOUT_SECS: u64 = 120;
 

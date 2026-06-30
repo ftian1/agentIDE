@@ -28,17 +28,34 @@ At natural breakpoints (session start, task completion, user asks "what's next")
 3. If a TODO item's scope has changed, update it
 4. Proactively remind the user of high-priority pending items
 
-### 4. Build Verification
-After any Rust code change in `apps/frontend/src-tauri/` or `crates/`:
-- Run `cargo build -p remote-agent-host --target x86_64-unknown-linux-gnu --release`
-- Copy binary: `cp target/x86_64-unknown-linux-gnu/release/agent apps/frontend/src-tauri/binaries/remote-agent-host-x86_64`
-- Touch `apps/frontend/src-tauri/src/bootstrap/uploader.rs` to force recompile (Cargo doesn't track `include_bytes!` changes)
-- Build Windows exe: `cargo xwin build --target x86_64-pc-windows-msvc --release -p remote-ai-ide`
-- Copy to root: `cp target/x86_64-pc-windows-msvc/release/remote-ai-ide.exe .`
+### 4. Build & Release (OTA)
 
-After any frontend change in `apps/frontend/src/`:
-- Run `npx tsc --noEmit` then `pnpm build`
-- Touch uploader.rs and rebuild Windows exe (frontend dist is embedded)
+All builds go through `scripts/release.sh`. It handles Vite, Rust cross-compilation,
+tar.gz packaging, pricing.json, and manifest.json generation. **Always run it after
+code changes** — otherwise the OTA updater on Windows clients won't see updates.
+
+**Which flag to use:**
+
+| Scope | Command | What it builds |
+|-------|---------|----------------|
+| Only TS/React/JSON | `./scripts/release.sh --frontend-only` | Vite → `frontend.tar.gz` + `pricing.json` + `manifest.json` |
+| Only Rust crates | `./scripts/release.sh --agent-only` | Agent binaries (Linux + Windows) + manifest |
+| Only Tauri shell | `./scripts/release.sh --tauri-only` | `main.exe` + `loader-*` + manifest |
+
+**Full workflow after changes:**
+
+1. Run the appropriate release.sh flag
+2. If `--frontend-only` was used, restore unchanged binaries from git:
+   `git checkout HEAD -- dist/agent-* dist/loader-* dist/main.exe`
+3. Force-add dist files (gitignored but tracked): `git add -f dist/`
+4. Commit: `git commit -m "release: $(date -u +%Y-%m-%d).$(git rev-parse --short=7 HEAD) — <what changed>"`
+5. Push — dist/ files are tracked in git despite `.gitignore` (force-added)
+
+**What happens on the client:**
+- Windows exe's background updater fetches `dist/manifest.json` every 30 min
+- Compares local cache SHA256 → downloads mismatched/missing files to cache dir
+- `frontend.tar.gz` is extracted to `frontend/` subdirectory
+- `pricing.json` is stored standalone (also available via runtime fetch at the raw GitHub URL)
 
 ## Project Structure Quick Reference
 
