@@ -1,14 +1,16 @@
 /**
- * UpdateBanner — shows a non-intrusive notification when the background
- * OTA updater has downloaded new components and a restart would apply them.
+ * UpdateBanner / UpgradeDialog — shows a notification when the background
+ * OTA updater has downloaded new components.
  *
- * Listens for the Tauri `update:available` event.  On click, calls
- * `prepare_restart` to save state and exit gracefully.
+ * - loader.exe self-update → modal dialog (Upgrade / Cancel)
+ * - Other file updates → non-intrusive banner with Restart button
+ *
+ * Listens for the Tauri `update:available` event.
  */
 
 import { useEffect, useState } from 'react';
-import { RefreshCw, X, Download, CheckCircle } from 'lucide-react';
-import { prepareRestart } from '../../api/restartApi';
+import { RefreshCw, X, Download, CheckCircle, AlertTriangle } from 'lucide-react';
+import { prepareRestart, applyUpdateAndRestart } from '../../api/restartApi';
 
 interface UpdatePayload {
   version: string;
@@ -44,11 +46,15 @@ export function UpdateBanner() {
     });
   }, []);
 
+  const isSelfUpdate = available?.updated.includes('loader.exe') ?? false;
+
   const handleRestart = () => {
     setRestarting(true);
-    // Fire-and-forget — the Rust command calls process::exit(0),
-    // which kills the IPC connection.  Awaiting it would always throw.
-    prepareRestart().catch(() => {});
+    if (isSelfUpdate) {
+      applyUpdateAndRestart().catch(() => {});
+    } else {
+      prepareRestart().catch(() => {});
+    }
   };
 
   const handleDismiss = () => {
@@ -73,7 +79,52 @@ export function UpdateBanner() {
     );
   }
 
-  // Show "update ready" banner.
+  // Self-update (loader.exe) → modal dialog.
+  if (available && !dismissed && isSelfUpdate) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="bg-bg-secondary border border-border rounded-lg shadow-xl w-96 p-6">
+          <div className="flex items-start gap-3 mb-4">
+            <AlertTriangle size={24} className="text-amber-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <h3 className="text-sm font-semibold text-text-primary">
+                IDE Update Available
+              </h3>
+              <p className="text-xs text-text-secondary mt-1">
+                A new version of Remote AI IDE has been downloaded and is ready
+                to install. The IDE will restart to apply the update.
+              </p>
+              {available.updated.length > 1 && (
+                <p className="text-xs text-text-secondary mt-1">
+                  Also updated: {available.updated.filter(f => f !== 'loader.exe').join(', ')}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={handleDismiss}
+              disabled={restarting}
+              className="px-4 py-1.5 text-xs rounded text-text-secondary hover:text-text-primary hover:bg-bg-tertiary transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleRestart}
+              disabled={restarting}
+              className="flex items-center gap-1.5 px-4 py-1.5 text-xs rounded bg-accent text-white hover:bg-blue-500 disabled:opacity-50 transition-colors"
+            >
+              <RefreshCw size={12} className={restarting ? 'animate-spin' : ''} />
+              {restarting ? 'Upgrading…' : 'Upgrade & Restart'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Regular update (frontend / agent / etc.) → inline banner.
   if (available && !dismissed) {
     return (
       <div className="flex items-center gap-2 px-3 py-1.5 bg-green-900/30 border-b border-green-800/50 text-xs">

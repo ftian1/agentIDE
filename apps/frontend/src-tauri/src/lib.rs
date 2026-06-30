@@ -466,6 +466,7 @@ pub fn run() {
             commands::config::save_app_config,
             commands::restart::prepare_restart,
             commands::restart::check_restart_flag,
+            commands::restart::apply_update_and_restart,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

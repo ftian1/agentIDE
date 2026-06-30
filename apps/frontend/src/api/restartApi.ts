@@ -11,3 +11,11 @@ export async function prepareRestart(): Promise<void> {
 export async function checkRestartFlag(): Promise<boolean> {
   return invoke('check_restart_flag');
 }
+
+/**
+ * Apply a downloaded self-update (.loader.exe.new) and restart.
+ * Replaces the running exe with the new one and relaunches.
+ */
+export async function applyUpdateAndRestart(): Promise<void> {
+  return invoke('apply_update_and_restart');
+}

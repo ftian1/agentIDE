@@ -117,7 +117,16 @@ async fn check_and_update(
     // 2. Compare each file.
     let mut updated = Vec::new();
     for (name, entry) in &manifest.files {
-        let local = cache_dir.join(name);
+        let is_self_update = name == "loader.exe";
+
+        // For self-update, the new exe is stored as .loader.exe.new
+        // (can't overwrite the running exe).
+        let local = if is_self_update {
+            cache_dir.join(".loader.exe.new")
+        } else {
+            cache_dir.join(name)
+        };
+
         let needs_update = if local.exists() {
             match sha256_hex(&local) {
                 Ok(hash) if hash == entry.sha256 => false,
@@ -261,6 +270,11 @@ mod http {
                 std::fs::create_dir_all(&frontend_dir)?;
                 super::extract_tar_gz(&final_path, &frontend_dir)?;
                 tracing::info!("updater: extracted {} -> {}", name, frontend_dir.display());
+            } else if name == "loader.exe" {
+                // Self-update: save as .loader.exe.new (can't overwrite running exe).
+                let final_path = cache_dir.join(".loader.exe.new");
+                std::fs::rename(&tmp, &final_path)?;
+                tracing::info!("updater: saved self-update to {}", final_path.display());
             } else {
                 std::fs::rename(&tmp, cache_dir.join(&name))?;
             }
@@ -389,6 +403,11 @@ mod http {
             std::fs::create_dir_all(&frontend_dir)?;
             super::extract_tar_gz(&final_path, &frontend_dir)?;
             tracing::info!("updater: extracted {} -> {}", name, frontend_dir.display());
+        } else if name == "loader.exe" {
+            // Self-update: save as .loader.exe.new (can't overwrite running exe).
+            let final_path = cache_dir.join(".loader.exe.new");
+            std::fs::rename(&tmp, &final_path)?;
+            tracing::info!("updater: saved self-update to {}", final_path.display());
         } else {
             std::fs::rename(&tmp, cache_dir.join(name))?;
         }

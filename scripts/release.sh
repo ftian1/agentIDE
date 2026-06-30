@@ -93,8 +93,8 @@ if $TAURI; then
 fi
 
 # ── 4. Pricing + Manifest ───────────────────────────────────────────
-# loader.exe is NOT in the manifest — it's the bootstrap entry point,
-# deployed once manually. Only cache-updatable files go in the manifest.
+# loader.exe IS in the manifest — the OTA updater can self-update by
+# downloading the new exe to cache/.loader.exe.new and restarting.
 if $PRICING; then
   echo "─── [4/4] Pricing + Manifest ───"
   cp pricing.json "$DIST_DIR/pricing.json"
@@ -105,7 +105,7 @@ if $PRICING; then
   echo "  \"files\": {" >> "$MANIFEST"
 
   FIRST=true
-  for f in $(ls "$DIST_DIR" | grep -v -E 'manifest.json|loader.exe' | sort); do
+  for f in $(ls "$DIST_DIR" | grep -v -E 'manifest.json' | sort); do
     path="$DIST_DIR/$f"
     sha=$(sha256sum "$path" | awk '{print $1}')
     size=$(stat -c%s "$path" 2>/dev/null || stat -f%z "$path" 2>/dev/null)
