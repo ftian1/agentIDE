@@ -12,7 +12,16 @@ update `design.md` with:
 Keep `design.md` organized by topic. Add new sections under `## 4. 设计决策记录` following the
 existing numbered format.
 
-### 2. TODO Tracking
+### 2. Debugging: Log, Don't Guess
+
+When the user reports a bug and you are **not 100% certain** of the root cause:
+- **Add `tracing::info!` / `console.log` along every plausible code path** before making fixes
+- Let the user run the instrumented build and report back with logs
+- Only then apply the targeted fix based on evidence, not speculation
+
+This saves both sides from wasted rebuild cycles on wrong guesses.
+
+### 3. TODO Tracking
 When you identify something that is "worth doing but not yet done":
 - Add it to `TODO.txt` under the appropriate section
 - Be specific: what, why, what files are involved
@@ -21,14 +30,14 @@ When you identify something that is "worth doing but not yet done":
   This maintains a complete record of what was done and what remains.
 - If a completed item represents a design decision, also document it in `design.md`
 
-### 3. Periodic Review (triggered at session start or when work pauses)
+### 4. Periodic Review (triggered at session start or when work pauses)
 At natural breakpoints (session start, task completion, user asks "what's next"):
 1. Quickly scan `TODO.txt` for items that could be addressed now
 2. If a TODO item has become stale or irrelevant, remove it
 3. If a TODO item's scope has changed, update it
 4. Proactively remind the user of high-priority pending items
 
-### 4. Build & Release (OTA)
+### 5. Build & Release (OTA)
 
 All builds go through `scripts/release.sh`. It handles Vite, Rust cross-compilation,
 tar.gz packaging, pricing.json, and manifest.json generation. **Always run it after
