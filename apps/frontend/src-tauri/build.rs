@@ -1,7 +1,14 @@
 fn main() {
-    // Track embedded agent binaries so Cargo recompiles when they change.
+    // Track changes so Cargo re-runs build.rs when these change.
     println!("cargo:rerun-if-changed=binaries/remote-agent-host-x86_64");
     println!("cargo:rerun-if-changed=binaries/remote-agent-host-aarch64");
+    // Track the dist/ dir from the release script — ensures embedded tarball
+    // and build info stay in sync with the actual dist files.
+    println!("cargo:rerun-if-changed=../../../../dist/frontend.tar.gz");
+    println!("cargo:rerun-if-changed=../../../../dist/agent-linux-x86_64");
+    println!("cargo:rerun-if-changed=../../../../dist/agent-windows-x86_64");
+    println!("cargo:rerun-if-changed=../../../../dist/pricing.json");
+    println!("cargo:rerun-if-changed=../../../../dist/manifest.json");
     // Stale stub copies at apps/frontend/binaries/ — remove if present
     let old = std::path::Path::new("../binaries");
     if old.exists() {
