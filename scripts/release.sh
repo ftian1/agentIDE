@@ -76,11 +76,40 @@ if $AGENT; then
   fi
 fi
 
-# ── 3. Tauri shell (= loader.exe) ────────────────────────────────────
-# This is the single entry-point exe. It embeds frontend + agent binaries
-# as defaults, prefers cache/ on startup, and runs the OTA background updater.
+# ── 3. Pricing + Manifest (partial, before Tauri) ───────────────────
+# Generate pricing + manifest BEFORE the Tauri build, so build.rs can
+# embed all dist files into the binary as the baseline for cache extraction.
+if $PRICING; then
+  echo "─── [3/5] Pricing + Manifest ───"
+  cp pricing.json "$DIST_DIR/pricing.json"
+
+  # Generate manifest from current dist files (without loader.exe, which
+  # hasn't been built yet — we'll add it after the Tauri build).
+  MANIFEST="$DIST_DIR/manifest.json"
+  echo "{" > "$MANIFEST"
+  echo "  \"version\": \"$VERSION\"," >> "$MANIFEST"
+  echo "  \"files\": {" >> "$MANIFEST"
+  FIRST=true
+  for f in $(ls "$DIST_DIR" | grep -v -E 'manifest.json|loader.exe' | sort); do
+    path="$DIST_DIR/$f"
+    sha=$(sha256sum "$path" | awk '{print $1}')
+    size=$(stat -c%s "$path" 2>/dev/null || stat -f%z "$path" 2>/dev/null)
+    if ! $FIRST; then echo "    ," >> "$MANIFEST"; fi
+    FIRST=false
+    printf '    "%s": {"sha256": "%s", "size": %d}' "$f" "$sha" "$size" >> "$MANIFEST"
+  done
+  echo "" >> "$MANIFEST"
+  echo "  }" >> "$MANIFEST"
+  echo "}" >> "$MANIFEST"
+  echo "  manifest.json (partial) $(wc -c < $MANIFEST) bytes"
+fi
+
+# ── 4. Tauri shell (= loader.exe) ────────────────────────────────────
+# Build LAST so the embedded tarball (created by build.rs from dist/)
+# includes all components: frontend.tar.gz, agent binaries, pricing.json,
+# and manifest.json. On startup, extract all to cache as baseline.
 if $TAURI; then
-  echo "─── [3/4] App binary ───"
+  echo "─── [4/5] App binary ───"
   if $DRY_RUN; then
     echo "  [dry-run] cargo xwin build -p remote-ai-ide"
   else
@@ -92,32 +121,21 @@ if $TAURI; then
   fi
 fi
 
-# ── 4. Pricing + Manifest ───────────────────────────────────────────
-# loader.exe IS in the manifest — the OTA updater can self-update by
-# downloading the new exe to cache/.loader.exe.new and restarting.
-if $PRICING; then
-  echo "─── [4/4] Pricing + Manifest ───"
-  cp pricing.json "$DIST_DIR/pricing.json"
-
-  MANIFEST="$DIST_DIR/manifest.json"
-  echo "{" > "$MANIFEST"
-  echo "  \"version\": \"$VERSION\"," >> "$MANIFEST"
-  echo "  \"files\": {" >> "$MANIFEST"
-
-  FIRST=true
-  for f in $(ls "$DIST_DIR" | grep -v -E 'manifest.json' | sort); do
-    path="$DIST_DIR/$f"
-    sha=$(sha256sum "$path" | awk '{print $1}')
-    size=$(stat -c%s "$path" 2>/dev/null || stat -f%z "$path" 2>/dev/null)
-    if ! $FIRST; then echo "    ," >> "$MANIFEST"; fi
-    FIRST=false
-    printf '    "%s": {"sha256": "%s", "size": %d}' "$f" "$sha" "$size" >> "$MANIFEST"
-  done
-  echo "" >> "$MANIFEST"
-  echo "  }" >> "$MANIFEST"
-  echo "}" >> "$MANIFEST"
-
-  echo "  manifest.json  $(wc -c < $MANIFEST) bytes"
+# ── 5. Update manifest with loader.exe hash ─────────────────────────
+if $TAURI && [ -f "$DIST_DIR/loader.exe" ]; then
+  echo "─── [5/5] Update manifest ───"
+  loader_sha=$(sha256sum "$DIST_DIR/loader.exe" | awk '{print $1}')
+  loader_size=$(stat -c%s "$DIST_DIR/loader.exe" 2>/dev/null || stat -f%z "$DIST_DIR/loader.exe" 2>/dev/null)
+  # Insert loader.exe entry into existing manifest.json
+  python3 -c "
+import json
+with open('$DIST_DIR/manifest.json') as f:
+    m = json.load(f)
+m['files']['loader.exe'] = {'sha256': '$loader_sha', 'size': $loader_size}
+with open('$DIST_DIR/manifest.json', 'w') as f:
+    json.dump(m, f, indent=2)
+"
+  echo "  manifest.json updated with loader.exe ($loader_size bytes)"
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────
