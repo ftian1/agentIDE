@@ -49,13 +49,13 @@ code changes** — otherwise the OTA updater on Windows clients won't see update
 |-------|---------|----------------|
 | Only TS/React/JSON | `./scripts/release.sh --frontend-only` | Vite → `frontend.tar.gz` + `pricing.json` + `manifest.json` |
 | Only Rust crates | `./scripts/release.sh --agent-only` | Agent binaries (Linux + Windows) + manifest |
-| Only Tauri shell | `./scripts/release.sh --tauri-only` | `main.exe` + `loader-*` + manifest |
+| Only Tauri shell | `./scripts/release.sh --tauri-only` | `loader.exe` (single entry-point) + manifest |
 
 **Full workflow after changes:**
 
 1. Run the appropriate release.sh flag
 2. If `--frontend-only` was used, restore unchanged binaries from git:
-   `git checkout HEAD -- dist/agent-* dist/loader-* dist/main.exe`
+   `git checkout HEAD -- dist/agent-*`
 3. Force-add dist files (gitignored but tracked): `git add -f dist/`
 4. Commit: `git commit -m "release: $(date -u +%Y-%m-%d).$(git rev-parse --short=7 HEAD) — <what changed>"`
 5. Push — dist/ files are tracked in git despite `.gitignore` (force-added)

@@ -5,23 +5,24 @@
 #   ./scripts/release.sh                     # build everything
 #   ./scripts/release.sh --frontend-only     # only Vite build (TS/React changes)
 #   ./scripts/release.sh --agent-only        # only agent binaries (crate changes)
-#   ./scripts/release.sh --tauri-only        # only Tauri shell + loader
+#   ./scripts/release.sh --tauri-only        # only Tauri shell
 #   ./scripts/release.sh --dry-run           # show what would be built
 #
 # Output (dist/):
-#   manifest.json  frontend.tar.gz  agent-*  main.exe  loader-*  pricing.json
+#   loader.exe (= the IDE, includes embedded defaults)
+#   manifest.json  frontend.tar.gz  agent-*  pricing.json
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # ── Parse flags ─────────────────────────────────────────────────────
-FRONTEND=true; AGENT=true; TAURI=true; LOADER=true; PRICING=true
+FRONTEND=true; AGENT=true; TAURI=true; PRICING=true
 DRY_RUN=false
 
 for arg in "$@"; do
   case "$arg" in
-    --frontend-only) AGENT=false; TAURI=false; LOADER=false; PRICING=false ;;
-    --agent-only)   FRONTEND=false; TAURI=false; LOADER=false; PRICING=false ;;
+    --frontend-only) AGENT=false; TAURI=false; PRICING=false ;;
+    --agent-only)   FRONTEND=false; TAURI=false; PRICING=false ;;
     --tauri-only)   FRONTEND=false; AGENT=false; PRICING=false ;;
     --dry-run)      DRY_RUN=true ;;
     *)              echo "Unknown flag: $arg"; exit 1 ;;
@@ -36,7 +37,7 @@ VERSION="$(date -u +%Y-%m-%d).$(git rev-parse --short=7 HEAD 2>/dev/null || echo
 echo ""
 echo "╔══════════════════════════════════════════════════╗"
 echo "║  Release: $VERSION"
-echo "║  Frontend: $FRONTEND | Agent: $AGENT | Tauri: $TAURI | Loader: $LOADER"
+echo "║  Frontend: $FRONTEND | Agent: $AGENT | Tauri: $TAURI"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 
@@ -75,43 +76,27 @@ if $AGENT; then
   fi
 fi
 
-# ── 3. Tauri shell ──────────────────────────────────────────────────
+# ── 3. Tauri shell (= loader.exe) ────────────────────────────────────
+# This is the single entry-point exe. It embeds frontend + agent binaries
+# as defaults, prefers cache/ on startup, and runs the OTA background updater.
 if $TAURI; then
-  echo "─── [3/5] Tauri shell ───"
+  echo "─── [3/4] App binary ───"
   if $DRY_RUN; then
     echo "  [dry-run] cargo xwin build -p remote-ai-ide"
   else
     START=$(date +%s)
     cargo xwin build --target x86_64-pc-windows-msvc --release -p remote-ai-ide 2>&1 | grep -E "Finished|error" || true
-    cp target/x86_64-pc-windows-msvc/release/remote-ai-ide.exe "$DIST_DIR/main.exe"
+    cp target/x86_64-pc-windows-msvc/release/remote-ai-ide.exe "$DIST_DIR/loader.exe"
     ELAPSED=$(( $(date +%s) - START ))
-    echo "  main.exe  $(du -h $DIST_DIR/main.exe | cut -f1)  (${ELAPSED}s)"
+    echo "  loader.exe  $(du -h $DIST_DIR/loader.exe | cut -f1)  (${ELAPSED}s)"
   fi
 fi
 
-# ── 4. Loader binaries ──────────────────────────────────────────────
-if $LOADER; then
-  echo "─── [4/5] Loader ───"
-  if $DRY_RUN; then
-    echo "  [dry-run] cargo build/xwin -p ota-loader"
-  else
-    START=$(date +%s)
-    cargo build -p ota-loader --target x86_64-unknown-linux-gnu --release 2>&1 | grep -E "Finished|error" || true
-    cp target/x86_64-unknown-linux-gnu/release/loader "$DIST_DIR/loader-linux-x86_64"
-
-    cargo xwin build -p ota-loader --target x86_64-pc-windows-msvc --release 2>&1 | grep -E "Finished|error" || true
-    cp target/x86_64-pc-windows-msvc/release/loader.exe "$DIST_DIR/loader-windows-x86_64.exe"
-
-    ELAPSED=$(( $(date +%s) - START ))
-    echo "  loader-linux-x86_64      $(du -h $DIST_DIR/loader-linux-x86_64 | cut -f1)"
-    echo "  loader-windows-x86_64.exe $(du -h $DIST_DIR/loader-windows-x86_64.exe | cut -f1)"
-    echo "  (${ELAPSED}s)"
-  fi
-fi
-
-# ── 5. Pricing + Manifest ───────────────────────────────────────────
+# ── 4. Pricing + Manifest ───────────────────────────────────────────
+# loader.exe is NOT in the manifest — it's the bootstrap entry point,
+# deployed once manually. Only cache-updatable files go in the manifest.
 if $PRICING; then
-  echo "─── [5/5] Pricing + Manifest ───"
+  echo "─── [4/4] Pricing + Manifest ───"
   cp pricing.json "$DIST_DIR/pricing.json"
 
   MANIFEST="$DIST_DIR/manifest.json"
@@ -120,7 +105,7 @@ if $PRICING; then
   echo "  \"files\": {" >> "$MANIFEST"
 
   FIRST=true
-  for f in $(ls "$DIST_DIR" | grep -v manifest.json | sort); do
+  for f in $(ls "$DIST_DIR" | grep -v -E 'manifest.json|loader.exe' | sort); do
     path="$DIST_DIR/$f"
     sha=$(sha256sum "$path" | awk '{print $1}')
     size=$(stat -c%s "$path" 2>/dev/null || stat -f%z "$path" 2>/dev/null)
