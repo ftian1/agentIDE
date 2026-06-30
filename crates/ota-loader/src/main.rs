@@ -8,9 +8,40 @@ use anyhow::Context;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[cfg(windows)]
+mod winhttp;
+
+// ── HTTP client (platform-specific) ────────────────────────────────
+
+/// GET a URL, returning the response body bytes.
+/// On Windows this uses WinHTTP (system proxy auto-detection).
+/// On other platforms it uses reqwest (blocking).
+fn http_get(url: &str) -> anyhow::Result<Vec<u8>> {
+    #[cfg(windows)]
+    {
+        winhttp::get(url).map_err(|e| anyhow::anyhow!("WinHTTP: {e}"))
+    }
+    #[cfg(not(windows))]
+    {
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
+            .timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
+            .build()
+            .context("build HTTP client")?;
+        let resp = client
+            .get(url)
+            .header("User-Agent", "ota-loader/0.1")
+            .send()
+            .context("HTTP GET")?;
+        if !resp.status().is_success() {
+            anyhow::bail!("HTTP GET {url} returned {}", resp.status());
+        }
+        Ok(resp.bytes().context("read body")?.to_vec())
+    }
+}
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -18,7 +49,6 @@ const MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/ftian1/agentIDE/main/dist/manifest.json";
 const MANIFEST_TTL_SECS: u64 = 300; // 5 min — don't hammer GitHub on restart
 const CONNECT_TIMEOUT_SECS: u64 = 15;
-const DOWNLOAD_TIMEOUT_SECS: u64 = 120;
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -116,29 +146,18 @@ fn fetch_manifest(cache: &Path) -> anyhow::Result<Manifest> {
     }
 
     log!("Fetching manifest from {}", MANIFEST_URL);
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
-        .timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
-        .build()
-        .context("build HTTP client")?;
-
-    let resp = client
-        .get(MANIFEST_URL)
-        .header("User-Agent", "ota-loader/0.1")
-        .send()
-        .context("fetch manifest")?;
-
-    if !resp.status().is_success() {
-        // If we can't reach GitHub, try the cached manifest even if stale.
-        if manifest_cache.exists() {
-            log!("GitHub unreachable ({}), using stale cached manifest", resp.status());
-            let data = std::fs::read_to_string(&manifest_cache)?;
-            return serde_json::from_str(&data).context("parse stale manifest");
+    let text = match http_get(MANIFEST_URL) {
+        Ok(body) => String::from_utf8(body).context("manifest not UTF-8")?,
+        Err(e) => {
+            // If we can't reach GitHub, try the cached manifest even if stale.
+            if manifest_cache.exists() {
+                log!("GitHub unreachable ({}), using stale cached manifest", e);
+                let data = std::fs::read_to_string(&manifest_cache)?;
+                return serde_json::from_str(&data).context("parse stale manifest");
+            }
+            anyhow::bail!("manifest fetch failed: {e} — no cached fallback");
         }
-        anyhow::bail!("manifest fetch failed: {} — no cached fallback", resp.status());
-    }
-
-    let text = resp.text().context("read manifest body")?;
+    };
     // Save to disk for TTL-based reuse.
     std::fs::write(&manifest_cache, &text).context("write manifest cache")?;
 
@@ -171,49 +190,25 @@ fn sync_file(cache: &Path, name: &str, entry: &FileEntry) -> anyhow::Result<()> 
 
     // Download.
     let url = manifest_base_url() + name;
-    let client = reqwest::blocking::Client::builder()
-        .connect_timeout(std::time::Duration::from_secs(CONNECT_TIMEOUT_SECS))
-        .timeout(std::time::Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
-        .build()
-        .context("build download client")?;
+    let data = http_get(&url).with_context(|| format!("download {url}"))?;
 
-    let mut resp = client
-        .get(&url)
-        .header("User-Agent", "ota-loader/0.1")
-        .send()
-        .with_context(|| format!("download {url}"))?;
-
-    if !resp.status().is_success() {
-        anyhow::bail!("download {url} failed: {}", resp.status());
-    }
-
-    // Write to temp file, then atomic rename.
-    let tmp = cache.join(format!(".{name}.tmp"));
-    let file = std::fs::File::create(&tmp).context("create tmp file")?;
+    // Verify hash.
     let mut hasher = Sha256::new();
-    let mut writer = HashingWriter {
-        file,
-        hasher: &mut hasher,
-    };
-
-    let downloaded = resp
-        .copy_to(&mut writer)
-        .with_context(|| format!("download {url}"))?;
-    writer.flush().context("flush tmp file")?;
-    drop(writer);
-
+    hasher.update(&data);
     let actual_hash = bytes_to_hex(&hasher.finalize());
     if actual_hash != entry.sha256 {
-        std::fs::remove_file(&tmp).ok();
         anyhow::bail!(
-            "hash mismatch after download: expected {} got {}",
+            "hash mismatch after download: expected {}… got {}…",
             &entry.sha256[..16],
             &actual_hash[..16]
         );
     }
 
+    // Atomic write.
+    let tmp = cache.join(format!(".{name}.tmp"));
+    std::fs::write(&tmp, &data).context("write tmp file")?;
     std::fs::rename(&tmp, &local).context("atomic rename")?;
-    log!("  ✓ {} downloaded and verified ({} bytes)", name, downloaded);
+    log!("  ✓ {} downloaded and verified ({} bytes)", name, data.len());
     Ok(())
 }
 
@@ -322,23 +317,6 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
             let _ = write!(s, "{b:02x}");
             s
         })
-}
-
-/// Wraps a file writer and a SHA-256 hasher so we can hash while downloading.
-struct HashingWriter<'a> {
-    file: std::fs::File,
-    hasher: &'a mut Sha256,
-}
-
-impl<'a> Write for HashingWriter<'a> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let n = self.file.write(buf)?;
-        self.hasher.update(&buf[..n]);
-        Ok(n)
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.file.flush()
-    }
 }
 
 macro_rules! log {
