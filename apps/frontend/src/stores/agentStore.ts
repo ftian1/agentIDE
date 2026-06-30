@@ -7,7 +7,7 @@
  */
 import { create } from 'zustand';
 
-export type AgentBlockKind = 'thought' | 'action' | 'observation';
+export type AgentBlockKind = 'text' | 'thought' | 'action' | 'observation' | 'error' | 'unknown';
 
 export interface AgentBlock {
   id: string;
@@ -34,6 +34,7 @@ export interface AgentStore {
 
   _addUserTurn: (sessionId: string, text: string) => void;
   _appendBlock: (sessionId: string, block: AgentBlock) => void;
+  _appendBlockFromHttp: (sessionId: string, block: AgentBlock) => void;
   _setStatus: (sessionId: string, text: string) => void;
   clear: (sessionId: string) => void;
 
@@ -67,6 +68,29 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       const last = list[list.length - 1];
       // Append to the trailing agent turn; otherwise open a new agent turn.
       if (last && last.role === 'agent') {
+        const updated: AgentTurn = { ...last, blocks: [...last.blocks, block] };
+        return {
+          turns: { ...s.turns, [sessionId]: [...list.slice(0, -1), updated] },
+        };
+      }
+      const turn: AgentTurn = {
+        id: nextId(),
+        sessionId,
+        role: 'agent',
+        blocks: [block],
+        createdAt: new Date().toISOString(),
+      };
+      return { turns: { ...s.turns, [sessionId]: [...list, turn] } };
+    }),
+
+  // Same as _appendBlock but used by the HTTP bridge to avoid ID collisions.
+  _appendBlockFromHttp: (sessionId, block) =>
+    set((s) => {
+      const list = s.turns[sessionId] ?? [];
+      const last = list[list.length - 1];
+      if (last && last.role === 'agent') {
+        // Dedup: skip if a block with this ID already exists.
+        if (last.blocks.some((b) => b.id === block.id)) return s;
         const updated: AgentTurn = { ...last, blocks: [...last.blocks, block] };
         return {
           turns: { ...s.turns, [sessionId]: [...list.slice(0, -1), updated] },
@@ -132,6 +156,12 @@ export function deriveAgentActivity(state: AgentStore, sessionId: string | null)
       return 'Processing result…';
     case 'thought':
       return 'Thinking…';
+    case 'text':
+      return 'Replying…';
+    case 'error':
+      return 'Error';
+    case 'unknown':
+      return 'Stream event';
     default:
       return 'Idle';
   }

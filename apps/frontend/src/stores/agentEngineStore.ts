@@ -37,8 +37,10 @@ function emptyConfig(): AgentEngineConfig {
   return { workDir: '', argPresets: [], extraArgs: '', envModels: {}, extraEnv: [], authKey: '' };
 }
 
+const CLAUDE_DEFAULT_PRESETS = ['skip-permissions'];
+
 const DEFAULT_CONFIGS: Record<AgentKind, AgentEngineConfig> = {
-  claude: emptyConfig(),
+  claude: { ...emptyConfig(), argPresets: CLAUDE_DEFAULT_PRESETS },
   copilot: emptyConfig(),
   gemini: emptyConfig(),
   opencode: emptyConfig(),

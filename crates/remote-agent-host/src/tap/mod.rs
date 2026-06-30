@@ -8,6 +8,7 @@
 pub mod ca;
 pub mod proxy;
 pub mod record;
+pub mod translate;
 
 use std::collections::HashMap;
 
@@ -89,8 +90,12 @@ pub fn provider_upstream_host(base_url: &str) -> Option<(String, u16)> {
     Some((host, port))
 }
 
-/// Path prefix for Anthropic-compatible API endpoints on non-Anthropic providers.
-/// E.g., DeepSeek's Anthropic endpoint is at /anthropic, not the root.
+/// Path prefix for Anthropic-compatible API endpoints on non-Anthropic
+/// providers.  E.g., DeepSeek's Anthropic endpoint is at /anthropic, not the
+/// root.
+///
+/// For providers that do NOT support Anthropic natively at all, see
+/// [`translate::provider_supports_anthropic_native`].
 pub fn provider_path_prefix(provider_kind: &str) -> Option<&'static str> {
     match provider_kind {
         "deepseek" => Some("/anthropic"),

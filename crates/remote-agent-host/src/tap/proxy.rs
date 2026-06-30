@@ -390,6 +390,8 @@ async fn forward(
     );
 
     // Determine routing: providers → model-based, else old gateway, else passthrough.
+    // Also capture the matched provider kind so we can decide whether to translate.
+    let mut matched_kind: Option<String> = None;
     let (effective_hostname, effective_port, path_prefix, auth_token) = if !state.providers.is_empty() {
         // ── ROUTING MODE (model-based) ────────────────────────────
         let found = model_id.as_ref().and_then(|model| {
@@ -415,6 +417,7 @@ async fn forward(
                 has_auth = token.is_some(),
                 "tap: model matched → routing"
             );
+            matched_kind = Some(kind.clone());
             Some((host, port, pp.to_string(), token.map(String::from)))
         });
 
@@ -453,6 +456,7 @@ async fn forward(
                             has_auth = token.is_some(),
                             "tap: model mismatch → first provider"
                         );
+                        matched_kind = Some(kind.clone());
                         Some((host, port, pp.to_string(), token.map(String::from)))
                     })
                     .unwrap_or_else(|| {
@@ -486,6 +490,7 @@ async fn forward(
                             has_auth = token.is_some(),
                             "tap: preflight → first provider"
                         );
+                        matched_kind = Some(kind.clone());
                         Some((host, port, pp.to_string(), token.map(String::from)))
                     });
                 match fallback {
@@ -517,6 +522,19 @@ async fn forward(
         (cli_upstream_hostname.clone(), cli_upstream_port, String::new(), None)
     };
 
+    // Determine whether the matched provider needs Anthropic→OpenAI translation.
+    let needs_translate = matched_kind.as_deref().map_or(false, |kind| {
+        !crate::tap::translate::provider_supports_anthropic_native(kind)
+            && kind != "copilot"
+    });
+    if needs_translate {
+        tracing::info!(
+            provider_kind = ?matched_kind,
+            path = %path,
+            "tap: translate mode — will convert Anthropic↔OpenAI format"
+        );
+    }
+
     // If the CLI already targeted the Anthropic-compatible endpoint (e.g.
     // ANTHROPIC_BASE_URL includes the /anthropic prefix), don't double-apply.
     let effective_path = if !path_prefix.is_empty() && path.starts_with(&path_prefix) {
@@ -524,30 +542,18 @@ async fn forward(
     } else {
         format!("{path_prefix}{path}")
     };
-    let effective_url = format!("https://{effective_hostname}{effective_path}");
 
     // Log the full routing decision for debugging.
+    let pre_translate_url = format!("https://{effective_hostname}{effective_path}");
     tracing::info!(
         method = %method,
-        effective_url = %effective_url,
+        effective_url = %pre_translate_url,
         upstream = %effective_hostname,
         port = effective_port,
         path_prefix = if path_prefix.is_empty() { "(none)" } else { path_prefix.as_str() },
         has_auth = auth_token.is_some(),
         "tap: forwarding request to upstream"
     );
-    // Keep a clone for later logging after the builder consumes the original.
-    let log_url = effective_url.clone();
-
-    let builder = ExchangeBuilder {
-        exchange_id: uuid::Uuid::new_v4().to_string(),
-        method: method.to_string(),
-        url: effective_url,
-        host: effective_hostname.clone(),
-        req_headers,
-        req_body: req_body_bytes.to_vec(),
-        started_at,
-    };
 
     // Open a connection to the effective upstream — either directly or
     // through a corporate forward-proxy (HTTP CONNECT tunnel). Loopback /
@@ -596,7 +602,50 @@ async fn forward(
     });
 
     // Rebuild the upstream request (origin-form path + original headers/body).
-    let mut up_req = Request::builder().method(parts.method).uri(path);
+    // If the provider doesn't support Anthropic natively, translate the request
+    // body from Anthropic Messages → OpenAI Chat Completions format.
+    let (upstream_path, upstream_body) = if needs_translate {
+        match crate::tap::translate::request::translate_request(&req_body_bytes, &path) {
+            Ok(translated) => {
+                tracing::info!(
+                    original_path = %path,
+                    new_path = %translated.path,
+                    body_before = req_body_bytes.len(),
+                    body_after = translated.body.len(),
+                    "tap: request translated (Anthropic → OpenAI)"
+                );
+                (translated.path, Full::new(Bytes::from(translated.body)))
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "tap: request translation failed, forwarding original");
+                (path.clone(), Full::new(req_body_bytes.clone()))
+            }
+        }
+    } else {
+        (path.clone(), Full::new(req_body_bytes.clone()))
+    };
+
+    // Compute the actual upstream URL (after any translation).
+    let effective_url = format!("https://{effective_hostname}{upstream_path}");
+    let log_url = effective_url.clone();
+    tracing::info!(
+        method = %method,
+        final_url = %effective_url,
+        upstream = %effective_hostname,
+        "tap: final upstream URL"
+    );
+
+    let builder = ExchangeBuilder {
+        exchange_id: uuid::Uuid::new_v4().to_string(),
+        method: method.to_string(),
+        url: effective_url,
+        host: effective_hostname.clone(),
+        req_headers,
+        req_body: req_body_bytes.to_vec(),
+        started_at,
+    };
+
+    let mut up_req = Request::builder().method(parts.method).uri(&upstream_path);
     {
         let headers = up_req.headers_mut().unwrap();
         *headers = parts.headers;
@@ -619,7 +668,7 @@ async fn forward(
             );
         }
     }
-    let up_req = match up_req.body(Full::new(req_body_bytes)) {
+    let up_req = match up_req.body(upstream_body) {
         Ok(r) => r,
         Err(e) => return error_response(502, &format!("build upstream request: {e}")),
     };
@@ -682,24 +731,120 @@ async fn forward(
 
     let (resp_parts, resp_body) = upstream_resp.into_parts();
 
-    // Tee the streaming response body so the CLI still streams while we capture.
-    let tee = TeeBody::new(
-        resp_body,
-        EmitCtx {
-            builder,
-            status: status.as_u16(),
-            resp_headers,
-            duration_start: start,
-            transport_tx: state.transport_tx.clone(),
-            session_id: state.session_id.clone(),
-            seq: state.seq.clone(),
-        },
-    );
+    let is_streaming = resp_parts
+        .headers
+        .get(hyper::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("text/event-stream"))
+        .unwrap_or(false);
 
-    let mut out = Response::new(tee.boxed());
-    *out.status_mut() = status;
-    *out.headers_mut() = resp_parts.headers;
-    out
+    // Build the response body — with or without translation.
+    if needs_translate && is_streaming {
+        // ── Streaming translation ─────────────────────────────────
+        tracing::info!(method = %method, "tap: streaming response translation active");
+
+        let translated_body = crate::tap::translate::stream::StreamingTranslateBody::new(resp_body)
+            .with_recording(
+                builder,
+                status.as_u16(),
+                resp_headers,
+                start,
+                state.transport_tx.clone(),
+                state.session_id.clone(),
+                state.seq.clone(),
+            );
+
+        // Boxing: we need to return OutBody = BoxBody<Bytes, hyper::Error>.
+        // StreamingTranslateBody has Data=Bytes, Error=hyper::Error so map_err fits.
+        let boxed = http_body_util::BodyExt::boxed(translated_body);
+
+        let mut response = Response::new(boxed);
+        *response.status_mut() = status;
+        let headers = response.headers_mut();
+        for (k, v) in resp_parts.headers.iter() {
+            if k != hyper::header::CONTENT_LENGTH
+                && k != hyper::header::CONTENT_ENCODING
+                && k != hyper::header::TRANSFER_ENCODING
+            {
+                headers.insert(k.clone(), v.clone());
+            }
+        }
+        response
+    } else if needs_translate {
+        // ── Non-streaming translation ─────────────────────────────
+        tracing::info!(method = %method, "tap: non-streaming response translation active");
+
+        let full_body = match resp_body.collect().await {
+            Ok(c) => c.to_bytes(),
+            Err(e) => {
+                tracing::error!(error = %e, "tap: failed to read upstream body for translation");
+                return error_response(502, &format!("read upstream body: {e}"));
+            }
+        };
+
+        match crate::tap::translate::response::translate_nonstreaming_response(&full_body) {
+            Ok(translated) => {
+                tracing::info!(
+                    body_before = full_body.len(),
+                    body_after = translated.len(),
+                    "tap: response translated (OpenAI → Anthropic)"
+                );
+
+                // Emit the exchange record directly.
+                let duration_ms = start.elapsed().as_millis() as u64;
+                let (rec_body, truncated) = crate::tap::record::cap_body(translated.clone());
+                let exchange = builder.finish(
+                    status.as_u16(),
+                    resp_headers,
+                    rec_body,
+                    duration_ms,
+                    truncated,
+                );
+                let seq = state.seq.fetch_add(1, Ordering::SeqCst);
+                let _ = state.transport_tx.send(ProtocolMessage::HttpTraffic {
+                    session_id: state.session_id.clone(),
+                    exchange,
+                    seq,
+                });
+
+                let body = Full::new(Bytes::from(translated))
+                    .map_err(|never: std::convert::Infallible| match never {})
+                    .boxed();
+                let mut response = Response::new(body);
+                *response.status_mut() = status;
+                let headers = response.headers_mut();
+                for (k, v) in resp_parts.headers.iter() {
+                    if k != hyper::header::CONTENT_LENGTH {
+                        headers.insert(k.clone(), v.clone());
+                    }
+                }
+                response
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "tap: response translation failed, returning error");
+                return error_response(502, &format!("response translation: {e}"));
+            }
+        }
+    } else {
+        // ── No translation — original TeeBody passthrough ────────
+        let tee = TeeBody::new(
+            resp_body,
+            EmitCtx {
+                builder,
+                status: status.as_u16(),
+                resp_headers,
+                duration_start: start,
+                transport_tx: state.transport_tx.clone(),
+                session_id: state.session_id.clone(),
+                seq: state.seq.clone(),
+            },
+        );
+
+        let mut response = Response::new(tee.boxed());
+        *response.status_mut() = status;
+        *response.headers_mut() = resp_parts.headers;
+        response
+    }
 }
 
 /// Context needed to emit the completed exchange once the body finishes.

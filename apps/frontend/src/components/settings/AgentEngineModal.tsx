@@ -41,13 +41,14 @@ const AGENTS: { kind: AgentKind; label: string; tool: string }[] = [
 ];
 
 /** Curated `claude` launch flags (reference: claude --help). */
-const CLAUDE_ARG_PRESETS: { id: string; label: string; tokens: string[] }[] = [
+const CLAUDE_ARG_PRESETS: { id: string; label: string; tokens: string[]; defaultOn?: boolean }[] = [
   { id: 'continue', label: 'Continue last session (--continue)', tokens: ['--continue'] },
   { id: 'verbose', label: 'Verbose logging (--verbose)', tokens: ['--verbose'] },
   {
     id: 'skip-permissions',
     label: 'Skip permission prompts (--dangerously-skip-permissions)',
     tokens: ['--dangerously-skip-permissions'],
+    defaultOn: true,
   },
   { id: 'plan-mode', label: 'Plan mode (--permission-mode plan)', tokens: ['--permission-mode', 'plan'] },
   { id: 'no-cache', label: 'Disable prompt cache (--no-cache)', tokens: ['--no-cache'] },

@@ -40,9 +40,16 @@ const AGENT_MODEL_ENV: Partial<Record<AgentKind, string>> = {
 /**
  * Anthropic-compatible API endpoint path prefix for non-Anthropic providers.
  * Mirrors `provider_path_prefix` in crates/remote-agent-host/src/tap/mod.rs.
+ *
+ * Providers that support Anthropic natively WITHOUT a path prefix (e.g.
+ * OpenRouter) are listed with an empty string.  Providers that do NOT support
+ * Anthropic at all (OpenAI, Gemini, Groq, Ollama) are NOT listed here — the
+ * proxy's translate layer (tap::translate::provider_supports_anthropic_native)
+ * detects them and converts request/response format transparently.
  */
 const ANTHROPIC_PATH_PREFIX: Partial<Record<ProviderKind, string>> = {
   deepseek: '/anthropic',
+  openrouter: '', // Anthropic-native, no prefix needed
 };
 
 /** Pick a model ID to tell the CLI to use when in provider-routing mode. */

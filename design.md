@@ -898,3 +898,127 @@ Windows 登录 Session 完成 NTLM 认证。
 - 如需代理 Basic/Digest 认证（非 NTLM），WinHTTP 同路径自动处理
 
 **相关文件**：`commands/winhttp.rs`, `commands/llm.rs`, `commands/mod.rs`, `Cargo.toml`
+
+## 4.29 Anthropic↔OpenAI API 格式翻译层（2026-06-26）
+
+**问题**：Provider routing 模式下，proxy 将 Claude Code CLI 的 Anthropic-format 请求
+转发到第三方 provider（OpenAI/Gemini/Groq/Ollama），但这些 provider 只支持 OpenAI Chat
+Completions API 格式（`/v1/chat/completions`），不理解 Anthropic Messages API 格式
+（`/v1/messages`）。此前仅 DeepSeek 因有显式 `/anthropic` endpoint 可用，其他 provider
+会直接收到错误。
+
+**方案**：在 proxy 中添加协议翻译层，对不支持 Anthropic 格式的 provider 透明转换：
+
+1. **检测**：`provider_supports_anthropic_native(kind)` — deepseek/openrouter 返回 true（原生支持），其余返回 false（需翻译）
+2. **Request 翻译**：Anthropic `/v1/messages` body → OpenAI `/v1/chat/completions` body + path
+   - system → 前置于 messages 数组
+   - tools[].input_schema → tools[].function.parameters
+   - tool_choice type 映射（auto→"auto", any→"required", tool→{type:"function",...}）
+   - stop_sequences → stop; top_k 丢弃; metadata 丢弃
+3. **Response 翻译（非流式）**：OpenAI chat completion → Anthropic message response
+   - choices[0].message.content → content[{type:"text", text:...}]
+   - usage.prompt_tokens/completion_tokens → input_tokens/output_tokens
+   - finish_reason 映射（stop→end_turn, length→max_tokens, etc.）
+   - OpenAI error → Anthropic error 格式
+4. **Response 翻译（流式 SSE）**：SseTranslator 状态机（Initial→TextContent/ToolCalls→Finished）
+   - OpenAI SSE chunks → Anthropic SSE events（message_start/content_block_start/content_block_delta/content_block_stop/message_delta/message_stop）
+   - SseLineParser 处理跨 TCP frame 边界的 partial lines
+   - StreamingTranslateBody 作为 hyper Body 实现，产出翻译后的 SSE 帧
+5. **Proxy 集成**：在 `proxy.rs` forward() 中，matched_kind 捕获后计算 `needs_translate`，
+   请求发送前翻译 body+path，响应返回前翻译 body（流式/非流式分支）
+
+**权衡**：
+- 使用 `serde_json::Value` 操作而非强类型 struct — 容忍未知字段、兼容 future API 变更
+- 流式翻译是完整状态机实现，非简化版 — 保证 CLI 流式体验（渐进输出）
+- 翻译失败 fallback：转发原始 body 而非中断请求，保证可用性
+- StreamingTranslateBody 内置 recording（with_recording），替代 TeeBody 避免泛型复杂化
+- V1 不处理 copilot（走独立 API 格式），不处理多 tool_result 的 user message（罕见场景）
+
+**相关文件**：`crates/remote-agent-host/src/tap/translate/{mod,request,response,stream}.rs`,
+`crates/remote-agent-host/src/tap/proxy.rs`, `crates/remote-agent-host/src/tap/mod.rs`,
+`apps/frontend/src/lib/spawnEnv.ts`
+
+---
+
+### 4.30 视觉交互层数据源设计：HTTP Proxy 流量解析
+
+**决策：不使用 `--output-format stream-json`（NDJSON），改用 HTTP Proxy 的 SSE 流量作为结构化数据源。**
+
+**理由：**
+1. `stream-json` 会使原生终端 tab 显示原始 JSON 行而非 TUI（体验降级）
+2. 每次 CLI 版本升级都可能改变 NDJSON 格式
+3. 只有 Claude Code 支持此格式，Copilot/OpenCode 等不可用
+4. NDJSON 路径需用户手动勾选 preset（或靠 Rust 端自动注入），增加了复杂度
+
+**方案：MITM tap proxy（§4.26）已拦截 CLI 的全部 HTTP 请求/响应。**
+Anthropic Messages API 的 SSE response body 包含与 NDJSON 相同的数据：
+AI text（`text_delta`）、工具声明（`tool_use` content block）、推理（`thinking`）、
+错误；request body 包含 tool_result（工具执行输出）。HTTP 格式是 API 规范级稳定，
+不随 CLI 版本变化。
+
+**架构：**
+
+```
+  CLI ──HTTP──→ tap proxy ──→ Anthropic API
+                  │
+                  ├──→ HttpTraffic ──SSH──→ httpTrafficStore (已存在)
+                  │                            │
+                  │                      httpEventBridge (新增)
+                  │                      parseSseResponse()
+                  │                      parseRequestToolResults()
+                  │                            │
+                  │                      agentStore (视觉交互层)
+                  │
+                  └── 原生终端：保留纯净 TUI（无 NDJSON 行污染）
+```
+
+**AgentBlock 类别体系（前端 `agentStore.ts`）：**
+
+| 类别 | HTTP 来源 | 视觉权重 | React 组件 |
+|------|----------|---------|-----------|
+| `text` | SSE `text_delta` | **PRIMARY** | `TextBlock` — AI 文字回复 |
+| `thought` | SSE `thinking` | SECONDARY | `ThinkingBlock` — 可折叠、灰色 |
+| `action` | SSE `tool_use` | **PRIMARY** | `ActionCard` — 工具卡片（状态 dot + 图标 + 文件链接） |
+| `observation` | 下个 request body `tool_result` (is_error=false) | **PRIMARY** | `ResultBlock` — 绿色成功 |
+| `error` | 下个 request body `tool_result` (is_error=true) | **PRIMARY** | `ResultBlock` — 红色错误 |
+| `unknown` | SSE 未识别的 event type | catch-all | 原始 JSON dump |
+
+**关键文件：**
+- `lib/httpEventParser.ts`（新） — Anthropic SSE → AgentBlock 解析器
+  - `parseSseResponse()`：将 SSE text_delta/tool_use/thinking/message_stop 拆为 block
+  - `parseRequestToolResults()`：从下个请求 body 提取 tool_result
+  - `parseHttpExchange()`：合并 request + response → AgentBlock[]
+- `lib/httpEventBridge.ts`（新） — 订阅 `http:traffic` 事件 → 解析 → `agentStore._appendBlockFromHttp()`
+- `stores/agentStore.ts` — `AgentBlockKind` 扩展为 6 种 + `_appendBlockFromHttp`（去重版）
+- `main.tsx` — 初始化 bridge
+- `components/agentpanel/` — 7 个 React 组件（TextBlock/ThinkingBlock/ActionCard/ResultBlock/CodeSnippet/StatusDot/LifecycleBanner）
+
+**覆盖对比：**
+
+| 事件类型 | HTTP Proxy | PTY |
+|----------|-----------|-----|
+| AI text reply | ✅ SSE text_delta | ❌ |
+| AI thinking | ✅ SSE thinking | ❌ |
+| tool_use 声明 | ✅ SSE tool_use | ❌ |
+| tool_result 输出 | ✅ 下个 request body | ❌ |
+| 文件路径 | ✅ tool_use.input.file_path | ❌ |
+| 文件新内容 | ✅ tool_use.input.new_string | ❌ |
+| 权限弹窗 | ❌ (HTTP 不可见) | 靠 `--dangerously-skip-permissions` 消除 |
+| 原生终端体验 | ✅ 纯净 TUI | ✅ TUI |
+
+**取舍：**
+- HTTP 事件是**批量到达**（exchange 完成后 proxy 才 emit），不是逐字符流式。视觉交互层更新粒度
+  为每个 exchange 一批 block。但实际体感差异很小（exchange 通常 < 2s）。
+- 权限弹窗（approval request）HTTP 不可见 → 默认 `--dangerously-skip-permissions`
+  已消除大部分权限弹窗。
+- 工具执行的**实时输出**（如 cargo build 的逐行日志）HTTP 也不可见 → 需在原生终端 tab 中查看。
+  但 HTTP 的 tool_result 会包含完整输出（在下个请求 body 中，有延迟但最终会出现）。
+
+**相关文件：**
+- `apps/frontend/src/lib/httpEventParser.ts` — SSE + request body 解析
+- `apps/frontend/src/lib/httpEventBridge.ts` — 桥接 httpTrafficStore → agentStore
+- `apps/frontend/src/stores/agentStore.ts` — `AgentBlockKind` 扩展 + `_appendBlockFromHttp`
+- `apps/frontend/src/main.tsx` — 初始化 bridge
+- `apps/frontend/src/components/agentpanel/` — 7 新组件 + 2 重写
+- `crates/remote-agent-host/src/tap/translate/` — Anthropic↔OpenAI 格式翻译层
+- `crates/remote-agent-host/src/tap/proxy.rs` — 翻译层集成 + matched_kind 追踪
