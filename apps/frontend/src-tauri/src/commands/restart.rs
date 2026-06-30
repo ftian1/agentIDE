@@ -39,8 +39,8 @@ struct ActiveSession {
 
 /// Called by the frontend when the user clicks "Restart to update".
 /// Saves all active connections and sessions to a flag file, then
-/// exits the process.  On next startup, the setup closure reads the
-/// flag and auto-reconnects.
+/// exits. On next startup, the setup closure reads the flag and
+/// auto-reconnects.
 #[tauri::command]
 pub async fn prepare_restart(
     state: State<'_, AppState>,
@@ -100,8 +100,7 @@ pub async fn prepare_restart(
         flag_path.display()
     );
 
-    // Give the flag file a moment to flush, then exit.
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    tracing::info!("restart: flag written — exiting process");
     std::process::exit(0);
 }
 

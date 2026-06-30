@@ -44,15 +44,11 @@ export function UpdateBanner() {
     });
   }, []);
 
-  const handleRestart = async () => {
+  const handleRestart = () => {
     setRestarting(true);
-    try {
-      await prepareRestart();
-    } catch (e) {
-      console.error('[UpdateBanner] prepareRestart failed:', e);
-      setRestarting(false);
-    }
-    // prepareRestart calls process::exit — we won't reach here on success.
+    // Fire-and-forget — the Rust command calls process::exit(0),
+    // which kills the IPC connection.  Awaiting it would always throw.
+    prepareRestart().catch(() => {});
   };
 
   const handleDismiss = () => {
