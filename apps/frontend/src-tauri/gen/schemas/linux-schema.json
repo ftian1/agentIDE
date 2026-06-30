@@ -387,6 +387,228 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Default plugin permissions.\n#### This default permission set includes:\n\n- `allow-connect`\n- `allow-disconnect`\n- `allow-list-connections`\n- `allow-list-ssh-configs`\n- `allow-list-files`\n- `allow-read-file`\n- `allow-write-file`\n- `allow-git-branches`\n- `allow-git-checkout`\n- `allow-spawn-session`\n- `allow-close-session`\n- `allow-resize-terminal`\n- `allow-write-input`\n- `allow-send-agent-message`\n- `allow-apply-code-change`\n- `allow-reject-code-change`\n- `allow-probe-tool`\n- `allow-install-tool`\n- `allow-load-agent-settings`\n- `allow-save-agent-settings`\n- `allow-copilot-device-start`\n- `allow-copilot-device-poll`\n- `allow-llm-fetch-models`\n- `allow-load-llm-providers`\n- `allow-save-llm-providers`\n- `allow-load-active-model`\n- `allow-save-active-model`\n- `allow-load-tap-settings`\n- `allow-save-tap-settings`\n- `allow-read-tap-traces`\n- `allow-clear-tap-traces`\n- `allow-load-tap-exchanges-db`\n- `allow-clear-tap-exchanges-db`\n- `allow-respond-approval`\n- `allow-load-app-config`\n- `allow-save-app-config`",
+          "type": "string",
+          "const": "default",
+          "markdownDescription": "Default plugin permissions.\n#### This default permission set includes:\n\n- `allow-connect`\n- `allow-disconnect`\n- `allow-list-connections`\n- `allow-list-ssh-configs`\n- `allow-list-files`\n- `allow-read-file`\n- `allow-write-file`\n- `allow-git-branches`\n- `allow-git-checkout`\n- `allow-spawn-session`\n- `allow-close-session`\n- `allow-resize-terminal`\n- `allow-write-input`\n- `allow-send-agent-message`\n- `allow-apply-code-change`\n- `allow-reject-code-change`\n- `allow-probe-tool`\n- `allow-install-tool`\n- `allow-load-agent-settings`\n- `allow-save-agent-settings`\n- `allow-copilot-device-start`\n- `allow-copilot-device-poll`\n- `allow-llm-fetch-models`\n- `allow-load-llm-providers`\n- `allow-save-llm-providers`\n- `allow-load-active-model`\n- `allow-save-active-model`\n- `allow-load-tap-settings`\n- `allow-save-tap-settings`\n- `allow-read-tap-traces`\n- `allow-clear-tap-traces`\n- `allow-load-tap-exchanges-db`\n- `allow-clear-tap-exchanges-db`\n- `allow-respond-approval`\n- `allow-load-app-config`\n- `allow-save-app-config`"
+        },
+        {
+          "description": "Enables the apply_code_change command.",
+          "type": "string",
+          "const": "allow-apply-code-change",
+          "markdownDescription": "Enables the apply_code_change command."
+        },
+        {
+          "description": "Enables the clear_tap_exchanges_db command.",
+          "type": "string",
+          "const": "allow-clear-tap-exchanges-db",
+          "markdownDescription": "Enables the clear_tap_exchanges_db command."
+        },
+        {
+          "description": "Enables the clear_tap_traces command.",
+          "type": "string",
+          "const": "allow-clear-tap-traces",
+          "markdownDescription": "Enables the clear_tap_traces command."
+        },
+        {
+          "description": "Enables the close_session command.",
+          "type": "string",
+          "const": "allow-close-session",
+          "markdownDescription": "Enables the close_session command."
+        },
+        {
+          "description": "Enables the connect command.",
+          "type": "string",
+          "const": "allow-connect",
+          "markdownDescription": "Enables the connect command."
+        },
+        {
+          "description": "Enables the copilot_device_poll command.",
+          "type": "string",
+          "const": "allow-copilot-device-poll",
+          "markdownDescription": "Enables the copilot_device_poll command."
+        },
+        {
+          "description": "Enables the copilot_device_start command.",
+          "type": "string",
+          "const": "allow-copilot-device-start",
+          "markdownDescription": "Enables the copilot_device_start command."
+        },
+        {
+          "description": "Enables the disconnect command.",
+          "type": "string",
+          "const": "allow-disconnect",
+          "markdownDescription": "Enables the disconnect command."
+        },
+        {
+          "description": "Enables the git_branches command.",
+          "type": "string",
+          "const": "allow-git-branches",
+          "markdownDescription": "Enables the git_branches command."
+        },
+        {
+          "description": "Enables the git_checkout command.",
+          "type": "string",
+          "const": "allow-git-checkout",
+          "markdownDescription": "Enables the git_checkout command."
+        },
+        {
+          "description": "Enables the install_tool command.",
+          "type": "string",
+          "const": "allow-install-tool",
+          "markdownDescription": "Enables the install_tool command."
+        },
+        {
+          "description": "Enables the list_connections command.",
+          "type": "string",
+          "const": "allow-list-connections",
+          "markdownDescription": "Enables the list_connections command."
+        },
+        {
+          "description": "Enables the list_files command.",
+          "type": "string",
+          "const": "allow-list-files",
+          "markdownDescription": "Enables the list_files command."
+        },
+        {
+          "description": "Enables the list_ssh_configs command.",
+          "type": "string",
+          "const": "allow-list-ssh-configs",
+          "markdownDescription": "Enables the list_ssh_configs command."
+        },
+        {
+          "description": "Enables the llm_fetch_models command.",
+          "type": "string",
+          "const": "allow-llm-fetch-models",
+          "markdownDescription": "Enables the llm_fetch_models command."
+        },
+        {
+          "description": "Enables the load_active_model command.",
+          "type": "string",
+          "const": "allow-load-active-model",
+          "markdownDescription": "Enables the load_active_model command."
+        },
+        {
+          "description": "Enables the load_agent_settings command.",
+          "type": "string",
+          "const": "allow-load-agent-settings",
+          "markdownDescription": "Enables the load_agent_settings command."
+        },
+        {
+          "description": "Enables the load_app_config command.",
+          "type": "string",
+          "const": "allow-load-app-config",
+          "markdownDescription": "Enables the load_app_config command."
+        },
+        {
+          "description": "Enables the load_llm_providers command.",
+          "type": "string",
+          "const": "allow-load-llm-providers",
+          "markdownDescription": "Enables the load_llm_providers command."
+        },
+        {
+          "description": "Enables the load_tap_exchanges_db command.",
+          "type": "string",
+          "const": "allow-load-tap-exchanges-db",
+          "markdownDescription": "Enables the load_tap_exchanges_db command."
+        },
+        {
+          "description": "Enables the load_tap_settings command.",
+          "type": "string",
+          "const": "allow-load-tap-settings",
+          "markdownDescription": "Enables the load_tap_settings command."
+        },
+        {
+          "description": "Enables the probe_tool command.",
+          "type": "string",
+          "const": "allow-probe-tool",
+          "markdownDescription": "Enables the probe_tool command."
+        },
+        {
+          "description": "Enables the read_file command.",
+          "type": "string",
+          "const": "allow-read-file",
+          "markdownDescription": "Enables the read_file command."
+        },
+        {
+          "description": "Enables the read_tap_traces command.",
+          "type": "string",
+          "const": "allow-read-tap-traces",
+          "markdownDescription": "Enables the read_tap_traces command."
+        },
+        {
+          "description": "Enables the reject_code_change command.",
+          "type": "string",
+          "const": "allow-reject-code-change",
+          "markdownDescription": "Enables the reject_code_change command."
+        },
+        {
+          "description": "Enables the resize_terminal command.",
+          "type": "string",
+          "const": "allow-resize-terminal",
+          "markdownDescription": "Enables the resize_terminal command."
+        },
+        {
+          "description": "Enables the respond_approval command.",
+          "type": "string",
+          "const": "allow-respond-approval",
+          "markdownDescription": "Enables the respond_approval command."
+        },
+        {
+          "description": "Enables the save_active_model command.",
+          "type": "string",
+          "const": "allow-save-active-model",
+          "markdownDescription": "Enables the save_active_model command."
+        },
+        {
+          "description": "Enables the save_agent_settings command.",
+          "type": "string",
+          "const": "allow-save-agent-settings",
+          "markdownDescription": "Enables the save_agent_settings command."
+        },
+        {
+          "description": "Enables the save_app_config command.",
+          "type": "string",
+          "const": "allow-save-app-config",
+          "markdownDescription": "Enables the save_app_config command."
+        },
+        {
+          "description": "Enables the save_llm_providers command.",
+          "type": "string",
+          "const": "allow-save-llm-providers",
+          "markdownDescription": "Enables the save_llm_providers command."
+        },
+        {
+          "description": "Enables the save_tap_settings command.",
+          "type": "string",
+          "const": "allow-save-tap-settings",
+          "markdownDescription": "Enables the save_tap_settings command."
+        },
+        {
+          "description": "Enables the send_agent_message command.",
+          "type": "string",
+          "const": "allow-send-agent-message",
+          "markdownDescription": "Enables the send_agent_message command."
+        },
+        {
+          "description": "Enables the spawn_session command.",
+          "type": "string",
+          "const": "allow-spawn-session",
+          "markdownDescription": "Enables the spawn_session command."
+        },
+        {
+          "description": "Enables the write_file command.",
+          "type": "string",
+          "const": "allow-write-file",
+          "markdownDescription": "Enables the write_file command."
+        },
+        {
+          "description": "Enables the write_input command.",
+          "type": "string",
+          "const": "allow-write-input",
+          "markdownDescription": "Enables the write_input command."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

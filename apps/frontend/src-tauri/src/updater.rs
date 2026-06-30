@@ -1,0 +1,319 @@
+//! Background OTA Updater — periodically checks the GitHub manifest,
+//! downloads updated components to the local cache, and notifies the
+//! frontend when a restart would apply the updates.
+//!
+//! Runs entirely on a background thread; the frontend is notified via
+//! Tauri events (`update:available`, `update:progress`).
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+use tauri::{AppHandle, Emitter};
+
+// ── Config ──────────────────────────────────────────────────────────
+
+const MANIFEST_URL: &str =
+    "https://raw.githubusercontent.com/ftian1/agentIDE/main/dist/manifest.json";
+/// Wait this long after startup before the first check, so the UI has time to load.
+const INITIAL_DELAY_SECS: u64 = 10;
+/// Interval between subsequent manifest checks.
+const CHECK_INTERVAL_SECS: u64 = 1800; // 30 minutes
+const FETCH_TIMEOUT_SECS: u64 = 15;
+const DOWNLOAD_TIMEOUT_SECS: u64 = 120;
+
+// ── Types ───────────────────────────────────────────────────────────
+
+#[derive(Deserialize, Debug, Clone)]
+struct Manifest {
+    version: String,
+    files: HashMap<String, FileEntry>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct FileEntry {
+    sha256: String,
+    size: u64,
+}
+
+/// Emitted to the frontend when one or more components were updated.
+#[derive(Clone, Serialize)]
+struct UpdateAvailablePayload {
+    version: String,
+    updated: Vec<String>,
+}
+
+/// Emitted during download for large files.
+#[derive(Clone, Serialize)]
+struct UpdateProgressPayload {
+    file: String,
+    downloaded: u64,
+    total: u64,
+}
+
+// ── Public API ──────────────────────────────────────────────────────
+
+/// Spawn a background task that periodically checks for updates.
+/// Call once from `setup`.
+pub fn spawn_background_updater(app_handle: AppHandle, cache_dir: PathBuf) {
+    tracing::info!(
+        "updater: spawning background checker (interval={CHECK_INTERVAL_SECS}s, cache={})",
+        cache_dir.display()
+    );
+
+    tauri::async_runtime::spawn(async move {
+        // Initial delay — let the UI load first.
+        tokio::time::sleep(Duration::from_secs(INITIAL_DELAY_SECS)).await;
+        tracing::info!("updater: starting first manifest check");
+
+        loop {
+            match check_and_update(&app_handle, &cache_dir).await {
+                Ok(Some(updated)) => {
+                    tracing::info!(
+                        "updater: {} component(s) updated, notifying frontend",
+                        updated.len()
+                    );
+                    let _ = app_handle.emit("update:available", UpdateAvailablePayload {
+                        version: updated.join(", "),
+                        updated: updated.clone(),
+                    });
+                }
+                Ok(None) => {
+                    tracing::info!("updater: all components up to date");
+                }
+                Err(e) => {
+                    tracing::warn!("updater: check failed: {e}");
+                }
+            }
+
+            tracing::info!(
+                "updater: sleeping {}s until next check",
+                CHECK_INTERVAL_SECS
+            );
+            tokio::time::sleep(Duration::from_secs(CHECK_INTERVAL_SECS)).await;
+        }
+    });
+}
+
+// ── Core logic ──────────────────────────────────────────────────────
+
+async fn check_and_update(
+    app_handle: &AppHandle,
+    cache_dir: &Path,
+) -> anyhow::Result<Option<Vec<String>>> {
+    std::fs::create_dir_all(cache_dir)?;
+
+    // 1. Fetch manifest.
+    let manifest = fetch_manifest(cache_dir).await?;
+    tracing::info!(
+        "updater: manifest version={}, {} files",
+        manifest.version,
+        manifest.files.len()
+    );
+
+    // 2. Compare each file.
+    let mut updated = Vec::new();
+    for (name, entry) in &manifest.files {
+        let local = cache_dir.join(name);
+        let needs_update = if local.exists() {
+            match sha256_hex(&local) {
+                Ok(hash) if hash == entry.sha256 => false,
+                Ok(hash) => {
+                    tracing::info!(
+                        "updater: {} hash mismatch (local {}…, remote {}…)",
+                        name,
+                        &hash[..16],
+                        &entry.sha256[..16]
+                    );
+                    true
+                }
+                Err(e) => {
+                    tracing::warn!("updater: {} cannot hash local file: {e}", name);
+                    true
+                }
+            }
+        } else {
+            tracing::info!("updater: {} missing, will download", name);
+            true
+        };
+
+        if needs_update {
+            tracing::info!("updater: downloading {} ({} bytes)", name, entry.size);
+            let _ = app_handle.emit("update:progress", UpdateProgressPayload {
+                file: name.clone(),
+                downloaded: 0,
+                total: entry.size,
+            });
+            download_file(name, entry, cache_dir).await?;
+            updated.push(name.clone());
+            tracing::info!("updater: {} downloaded and verified", name);
+        }
+    }
+
+    // 3. Clean stale files.
+    let managed: std::collections::HashSet<&str> =
+        manifest.files.keys().map(|s| s.as_str()).collect();
+    if let Ok(entries) = std::fs::read_dir(cache_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with('.') || name_str == "manifest.json" || name_str.ends_with(".json") {
+                continue;
+            }
+            if !managed.contains(name_str.as_ref()) {
+                tracing::info!("updater: removing stale file {}", name_str);
+                let path = entry.path();
+                if path.is_dir() {
+                    std::fs::remove_dir_all(&path).ok();
+                } else {
+                    std::fs::remove_file(&path).ok();
+                }
+            }
+        }
+    }
+
+    if updated.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(updated))
+    }
+}
+
+// ── Manifest fetch ──────────────────────────────────────────────────
+
+async fn fetch_manifest(cache_dir: &Path) -> anyhow::Result<Manifest> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
+        .build()?;
+
+    tracing::info!("updater: fetching manifest from {MANIFEST_URL}");
+    let resp = client
+        .get(MANIFEST_URL)
+        .header("User-Agent", "remote-ai-ide-updater/0.1")
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!("manifest fetch returned {}", resp.status());
+    }
+
+    let text = resp.text().await?;
+
+    // Cache the manifest locally for offline comparison.
+    let manifest_cache = cache_dir.join("manifest.json");
+    std::fs::write(&manifest_cache, &text)?;
+
+    let manifest: Manifest = serde_json::from_str(&text)?;
+    Ok(manifest)
+}
+
+// ── File download ───────────────────────────────────────────────────
+
+async fn download_file(
+    name: &str,
+    entry: &FileEntry,
+    cache_dir: &Path,
+) -> anyhow::Result<()> {
+    let base = MANIFEST_URL
+        .rsplit_once('/')
+        .map(|(b, _)| format!("{b}/"))
+        .unwrap_or_default();
+    let url = format!("{base}{name}");
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
+        .timeout(Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
+        .build()?;
+
+    let resp = client
+        .get(&url)
+        .header("User-Agent", "remote-ai-ide-updater/0.1")
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        anyhow::bail!("download {url} returned {}", resp.status());
+    }
+
+    let tmp = cache_dir.join(format!(".{name}.tmp"));
+    let file = std::fs::File::create(&tmp)?;
+    let mut hasher = Sha256::new();
+    let mut writer = HashingWriter {
+        file,
+        hasher: &mut hasher,
+    };
+
+    let bytes = resp.bytes().await?;
+    writer.write_all(&bytes)?;
+    writer.flush()?;
+    drop(writer);
+
+    let actual = bytes_to_hex(&hasher.finalize());
+    if actual != entry.sha256 {
+        std::fs::remove_file(&tmp).ok();
+        anyhow::bail!(
+            "hash mismatch after download: expected {}… got {}…",
+            &entry.sha256[..16],
+            &actual[..16]
+        );
+    }
+
+    // If it's a tar.gz, extract it into the frontend/ subdirectory.
+    if name.ends_with(".tar.gz") {
+        let frontend_dir = cache_dir.join("frontend");
+        std::fs::create_dir_all(&frontend_dir)?;
+        extract_tar_gz(&tmp, &frontend_dir)?;
+        std::fs::remove_file(&tmp).ok();
+        tracing::info!("updater: extracted {} -> {}", name, frontend_dir.display());
+    } else {
+        std::fs::rename(&tmp, cache_dir.join(name))?;
+    }
+
+    Ok(())
+}
+
+fn extract_tar_gz(tarball: &Path, dest: &Path) -> anyhow::Result<()> {
+    let data = std::fs::read(tarball)?;
+    let decoder = flate2::read::GzDecoder::new(&data[..]);
+    let mut archive = tar::Archive::new(decoder);
+    archive.unpack(dest)?;
+    Ok(())
+}
+
+// ── Helpers ────────────────────────────────────────────────────────
+
+struct HashingWriter<'a> {
+    file: std::fs::File,
+    hasher: &'a mut Sha256,
+}
+
+impl<'a> Write for HashingWriter<'a> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.file.write(buf)?;
+        self.hasher.update(&buf[..n]);
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.file.flush()
+    }
+}
+
+fn sha256_hex(path: &Path) -> anyhow::Result<String> {
+    let data = std::fs::read(path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&data);
+    Ok(bytes_to_hex(&hasher.finalize()))
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            use std::fmt::Write;
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+}

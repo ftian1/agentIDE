@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/shared-protocol",
     "crates/remote-agent-host",
+    "crates/ota-loader",
     "apps/frontend/src-tauri",
 ]
 

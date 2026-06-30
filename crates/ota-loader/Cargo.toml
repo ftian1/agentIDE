@@ -1,0 +1,19 @@
+[package]
+name = "ota-loader"
+version = "0.1.0"
+edition = "2021"
+description = "OTA updater: fetches manifest from GitHub, verifies cache, downloads updates, launches main app"
+
+[dependencies]
+anyhow = "1"
+reqwest = { version = "0.12", features = ["blocking", "native-tls-vendored"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Threading", "Win32_Foundation"] }
+
+[[bin]]
+name = "loader"
+path = "src/main.rs"

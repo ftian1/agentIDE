@@ -1,11 +1,17 @@
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import react from '@vitejs/plugin-react-swc';
+import path from 'path';
 
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig(async () => ({
   plugins: [react()],
   clearScreen: false,
+  resolve: {
+    alias: {
+      '@repo': path.resolve(__dirname, '../..'),
+    },
+  },
   server: {
     port: 1420,
     strictPort: true,
@@ -16,22 +22,23 @@ export default defineConfig(async () => ({
     watch: {
       ignored: ['**/src-tauri/**'],
     },
+    fs: {
+      // Allow imports from the repo root (e.g. pricing.json).
+      allow: [path.resolve(__dirname, '../..')],
+    },
   },
   build: {
     target: 'esnext',
     minify: 'esbuild',
-    // Code-split heavy deps for faster initial load
     rollupOptions: {
       output: {
         manualChunks(id) {
-          // xterm is lazy-loaded via React.lazy — keep it separate
           if (id.includes('@xterm')) return 'vendor-xterm';
-          // Monaco is lazy-loaded — keep in its own chunk
-          if (id.includes('monaco')) return 'vendor-monaco';
+          // monaco-editor is no longer bundled — it's loaded at runtime
+          // from /vendor/monaco/ (pre-built AMD, copied by scripts/build-monaco.sh)
         },
       },
     },
-    // Shave off bytes from production builds
     sourcemap: false,
   },
 }));

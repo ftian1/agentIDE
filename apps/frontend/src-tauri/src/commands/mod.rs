@@ -4,6 +4,7 @@ pub mod connection;
 pub mod files;
 pub mod llm;
 pub mod log_bridge;
+pub mod restart;
 pub mod session;
 pub mod settings;
 pub mod tap;

@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 pub type ConnectionId = String;
 
 pub struct ConnectionManager {
-    connections: DashMap<ConnectionId, Arc<Connection>>,
+    pub connections: DashMap<ConnectionId, Arc<Connection>>,
     #[allow(dead_code)]
     app_handle: AppHandle,
     /// Reconnection configuration.

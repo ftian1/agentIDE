@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, lazy, Suspense } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { SecondarySidebar } from './components/layout/SecondarySidebar';
+import { UpdateBanner } from './components/layout/UpdateBanner';
 import { ExplorerPanel } from './components/explorer/ExplorerPanel';
 import { ModelListPanel } from './components/models/ModelListPanel';
 import { SessionManagerPanel } from './components/session/SessionManagerPanel';
@@ -200,6 +201,7 @@ export function App() {
 
   return (
     <>
+      <UpdateBanner />
       <AppShell
         topBar={showChrome && topBarVisible ? <MenuBar rightSlot={<ConnectionBadge />} /> : undefined}
         sidebar={

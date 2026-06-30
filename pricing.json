@@ -1,0 +1,309 @@
+{
+  "version": 2,
+  "updatedAt": "2026-07-01",
+  "description": "LLM API pricing per 1M tokens (USD). Each model has base prices and optional conditional overrides evaluated in order (first match wins). Sources linked below.",
+  "sources": {
+    "anthropic": "https://docs.anthropic.com/en/api/pricing",
+    "openai": "https://platform.openai.com/docs/pricing",
+    "gemini": "https://ai.google.dev/pricing",
+    "deepseek": "https://platform.deepseek.com/api-docs/pricing"
+  },
+  "models": {
+    "claude-opus-4": {
+      "label": "Claude Opus 4",
+      "inputPrice": 5.0,
+      "outputPrice": 25.0,
+      "cacheReadPrice": 0.5,
+      "cacheWritePrice": 6.25,
+      "overrides": [
+        {
+          "name": "Prompt >200K tokens — 2× input, 1.5× output",
+          "when": { "inputTokens": { "gte": 200000 } },
+          "inputPrice": 10.0,
+          "outputPrice": 37.5,
+          "cacheReadPrice": 1.0,
+          "cacheWritePrice": 12.5
+        },
+        {
+          "name": "Cache TTL 1-hour — discounted cache read",
+          "when": { "cacheTtl": { "gte": 3600 } },
+          "cacheReadPrice": 0.25
+        },
+        {
+          "name": "Batch processing — 50% discount",
+          "when": { "isBatch": { "eq": true } },
+          "inputPrice": 2.5,
+          "outputPrice": 12.5,
+          "cacheReadPrice": 0.25,
+          "cacheWritePrice": 3.125
+        }
+      ]
+    },
+    "claude-sonnet-4": {
+      "label": "Claude Sonnet 4",
+      "inputPrice": 3.0,
+      "outputPrice": 15.0,
+      "cacheReadPrice": 0.3,
+      "cacheWritePrice": 3.75,
+      "overrides": [
+        {
+          "name": "Prompt >200K tokens — 2× input, 1.5× output",
+          "when": { "inputTokens": { "gte": 200000 } },
+          "inputPrice": 6.0,
+          "outputPrice": 22.5,
+          "cacheReadPrice": 0.6,
+          "cacheWritePrice": 7.5
+        },
+        {
+          "name": "Cache TTL 1-hour — discounted cache read",
+          "when": { "cacheTtl": { "gte": 3600 } },
+          "cacheReadPrice": 0.15
+        },
+        {
+          "name": "Batch processing — 50% discount",
+          "when": { "isBatch": { "eq": true } },
+          "inputPrice": 1.5,
+          "outputPrice": 7.5,
+          "cacheReadPrice": 0.15,
+          "cacheWritePrice": 1.875
+        }
+      ]
+    },
+    "claude-haiku-4-5": {
+      "label": "Claude Haiku 4.5",
+      "inputPrice": 1.0,
+      "outputPrice": 5.0,
+      "cacheReadPrice": 0.1,
+      "cacheWritePrice": 1.25,
+      "overrides": [
+        {
+          "name": "Batch processing — 50% discount",
+          "when": { "isBatch": { "eq": true } },
+          "inputPrice": 0.5,
+          "outputPrice": 2.5,
+          "cacheReadPrice": 0.05,
+          "cacheWritePrice": 0.625
+        }
+      ]
+    },
+    "claude-fable-5": {
+      "label": "Claude Fable 5",
+      "inputPrice": 3.0,
+      "outputPrice": 15.0,
+      "cacheReadPrice": 0.3,
+      "cacheWritePrice": 3.75,
+      "overrides": [
+        {
+          "name": "Prompt >200K tokens — 2× input, 1.5× output",
+          "when": { "inputTokens": { "gte": 200000 } },
+          "inputPrice": 6.0,
+          "outputPrice": 22.5,
+          "cacheReadPrice": 0.6,
+          "cacheWritePrice": 7.5
+        },
+        {
+          "name": "Cache TTL 1-hour — discounted cache read",
+          "when": { "cacheTtl": { "gte": 3600 } },
+          "cacheReadPrice": 0.15
+        }
+      ]
+    },
+    "claude-opus-4-1": {
+      "label": "Claude Opus 4.1 (legacy)",
+      "inputPrice": 15.0,
+      "outputPrice": 75.0,
+      "cacheReadPrice": 1.5,
+      "cacheWritePrice": 18.75
+    },
+    "claude-opus-3": {
+      "label": "Claude Opus 3 (legacy)",
+      "inputPrice": 15.0,
+      "outputPrice": 75.0,
+      "cacheReadPrice": 1.5,
+      "cacheWritePrice": 18.75
+    },
+    "claude-haiku-3-5": {
+      "label": "Claude Haiku 3.5 (legacy)",
+      "inputPrice": 0.8,
+      "outputPrice": 4.0,
+      "cacheReadPrice": 0.08,
+      "cacheWritePrice": 1.0
+    },
+    "gpt-4.1": {
+      "label": "GPT-4.1",
+      "inputPrice": 2.0,
+      "outputPrice": 8.0,
+      "cacheReadPrice": 1.0,
+      "cacheWritePrice": 0,
+      "overrides": [
+        {
+          "name": "Batch API — 50% discount",
+          "when": { "isBatch": { "eq": true } },
+          "inputPrice": 1.0,
+          "outputPrice": 4.0,
+          "cacheReadPrice": 0.5,
+          "cacheWritePrice": 0
+        }
+      ]
+    },
+    "gpt-4.1-mini": {
+      "label": "GPT-4.1 Mini",
+      "inputPrice": 0.4,
+      "outputPrice": 1.6,
+      "cacheReadPrice": 0.1,
+      "cacheWritePrice": 0,
+      "overrides": [
+        {
+          "name": "Batch API — 50% discount",
+          "when": { "isBatch": { "eq": true } },
+          "inputPrice": 0.2,
+          "outputPrice": 0.8,
+          "cacheReadPrice": 0.05,
+          "cacheWritePrice": 0
+        }
+      ]
+    },
+    "gpt-4.1-nano": {
+      "label": "GPT-4.1 Nano",
+      "inputPrice": 0.1,
+      "outputPrice": 0.4,
+      "cacheReadPrice": 0.025,
+      "cacheWritePrice": 0
+    },
+    "gpt-4o": {
+      "label": "GPT-4o",
+      "inputPrice": 2.5,
+      "outputPrice": 10.0,
+      "cacheReadPrice": 1.25,
+      "cacheWritePrice": 0,
+      "overrides": [
+        {
+          "name": "Batch API — 50% discount",
+          "when": { "isBatch": { "eq": true } },
+          "inputPrice": 1.25,
+          "outputPrice": 5.0,
+          "cacheReadPrice": 0.625,
+          "cacheWritePrice": 0
+        }
+      ]
+    },
+    "gpt-4o-mini": {
+      "label": "GPT-4o Mini",
+      "inputPrice": 0.15,
+      "outputPrice": 0.6,
+      "cacheReadPrice": 0.075,
+      "cacheWritePrice": 0,
+      "overrides": [
+        {
+          "name": "Batch API — 50% discount",
+          "when": { "isBatch": { "eq": true } },
+          "inputPrice": 0.075,
+          "outputPrice": 0.3,
+          "cacheReadPrice": 0.0375,
+          "cacheWritePrice": 0
+        }
+      ]
+    },
+    "o4-mini": {
+      "label": "o4-mini",
+      "inputPrice": 1.1,
+      "outputPrice": 4.4,
+      "cacheReadPrice": 0.275,
+      "cacheWritePrice": 0
+    },
+    "o3": {
+      "label": "O3",
+      "inputPrice": 2.0,
+      "outputPrice": 8.0,
+      "cacheReadPrice": 1.0,
+      "cacheWritePrice": 0
+    },
+    "o3-mini": {
+      "label": "O3 Mini",
+      "inputPrice": 0.55,
+      "outputPrice": 2.2,
+      "cacheReadPrice": 0.275,
+      "cacheWritePrice": 0
+    },
+    "gemini-2.5-pro": {
+      "label": "Gemini 2.5 Pro",
+      "inputPrice": 1.25,
+      "outputPrice": 10.0,
+      "cacheReadPrice": 0.125,
+      "cacheWritePrice": 0,
+      "overrides": [
+        {
+          "name": "Context >200K tokens — 2× input, 1.5× output",
+          "when": { "inputTokens": { "gte": 200000 } },
+          "inputPrice": 2.5,
+          "outputPrice": 15.0,
+          "cacheReadPrice": 0.25,
+          "cacheWritePrice": 0
+        }
+      ]
+    },
+    "gemini-2.5-flash": {
+      "label": "Gemini 2.5 Flash",
+      "inputPrice": 0.3,
+      "outputPrice": 2.5,
+      "cacheReadPrice": 0.03,
+      "cacheWritePrice": 0
+    },
+    "gemini-2.5-flash-lite": {
+      "label": "Gemini 2.5 Flash-Lite",
+      "inputPrice": 0.1,
+      "outputPrice": 0.4,
+      "cacheReadPrice": 0,
+      "cacheWritePrice": 0
+    },
+    "deepseek-v4-flash": {
+      "label": "DeepSeek V4 Flash",
+      "inputPrice": 0.14,
+      "outputPrice": 0.28,
+      "cacheReadPrice": 0.014,
+      "cacheWritePrice": 0
+    },
+    "deepseek-chat": {
+      "label": "DeepSeek Chat (→V4 Flash)",
+      "inputPrice": 0.14,
+      "outputPrice": 0.28,
+      "cacheReadPrice": 0.014,
+      "cacheWritePrice": 0
+    },
+    "deepseek-reasoner": {
+      "label": "DeepSeek Reasoner (→V4 Flash)",
+      "inputPrice": 0.14,
+      "outputPrice": 0.28,
+      "cacheReadPrice": 0.014,
+      "cacheWritePrice": 0
+    },
+    "deepseek-v3": {
+      "label": "DeepSeek V3 (legacy)",
+      "inputPrice": 0.27,
+      "outputPrice": 1.1,
+      "cacheReadPrice": 0.028,
+      "cacheWritePrice": 0
+    },
+    "mistral-large": {
+      "label": "Mistral Large",
+      "inputPrice": 2.0,
+      "outputPrice": 6.0,
+      "cacheReadPrice": 0,
+      "cacheWritePrice": 0
+    },
+    "mistral-small": {
+      "label": "Mistral Small",
+      "inputPrice": 0.2,
+      "outputPrice": 0.6,
+      "cacheReadPrice": 0,
+      "cacheWritePrice": 0
+    },
+    "codestral": {
+      "label": "Codestral",
+      "inputPrice": 0.3,
+      "outputPrice": 0.9,
+      "cacheReadPrice": 0,
+      "cacheWritePrice": 0
+    }
+  }
+}

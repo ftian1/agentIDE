@@ -5,6 +5,7 @@ pub mod connection;
 pub mod transport;
 pub mod bootstrap;
 pub mod store;
+pub mod updater;
 
 use std::sync::Arc;
 use tauri::Manager;
@@ -79,6 +80,52 @@ macro_rules! log_msg {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Platform-specific cache directory used by both the OTA loader
+/// (to download assets) and the main app (to load them at runtime).
+pub fn cache_dir() -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(dir) = std::env::var("LOCALAPPDATA") {
+            return std::path::PathBuf::from(dir).join("remote-ai-ide").join("cache");
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(dir) = std::env::var("XDG_DATA_HOME") {
+            return std::path::PathBuf::from(dir).join("remote-ai-ide").join("cache");
+        }
+        if let Ok(dir) = std::env::var("HOME") {
+            return std::path::PathBuf::from(dir).join(".local").join("share").join("remote-ai-ide").join("cache");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(dir) = std::env::var("HOME") {
+            return std::path::PathBuf::from(dir).join("Library").join("Application Support").join("remote-ai-ide").join("cache");
+        }
+    }
+    std::path::PathBuf::from("./cache")
+}
+
+/// Guess MIME type from file extension for static-file serving.
+fn mime_guess_for(path: &std::path::Path) -> String {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("html") | Some("htm") => "text/html",
+        Some("js") => "application/javascript",
+        Some("css") => "text/css",
+        Some("json") => "application/json",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        Some("wasm") => "application/wasm",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
 pub fn run() {
     let log_path = std::env::temp_dir().join("remote-ai-ide.log");
     let log_path_str = log_path.to_string_lossy().to_string();
@@ -131,19 +178,63 @@ pub fn run() {
     log_msg!(&log_path_str, "[remote-ai-ide] Building Tauri app...");
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init());
+
+    // ── Register custom protocol: cache:// → local cache directory ──
+    // The OTA loader downloads updated frontend/ to the cache directory.
+    // This protocol serves those files so we don't need to embed them.
+    let cache_for_protocol = cache_dir();
+    log_msg!(&log_path_str, "[remote-ai-ide] Cache dir: {}", cache_for_protocol.display());
+    let frontend_cache = cache_for_protocol.join("frontend");
+
+    let builder = builder.register_uri_scheme_protocol("cache", move |_ctx, request| {
+        let uri = request.uri();
+        // URI path on cache:// is like "/index.html" or "/assets/index-xxx.js"
+        let path = uri.path().trim_start_matches('/');
+        let resolved = frontend_cache.join(path);
+
+        // Prevent directory traversal.
+        if !resolved.starts_with(&frontend_cache) {
+            return tauri::http::Response::builder()
+                .status(403)
+                .body(Vec::new())
+                .unwrap();
+        }
+
+        match std::fs::read(&resolved) {
+            Ok(data) => {
+                let mime = mime_guess_for(&resolved);
+                tauri::http::Response::builder()
+                    .status(200)
+                    .header("Content-Type", mime)
+                    .body(data)
+                    .unwrap()
+            }
+            Err(_) => {
+                tauri::http::Response::builder()
+                    .status(404)
+                    .body(Vec::new())
+                    .unwrap()
+            }
+        }
+    });
+
     log_msg!(&log_path_str, "[remote-ai-ide] Tauri builder created, adding setup + invoke_handler...");
 
     let log_path_clone = log_path_str.clone();
+    let cache_for_window = cache_dir();
     builder
         .setup(move |app| {
             let app_handle = app.handle().clone();
             log_msg!(&log_path_clone, "[remote-ai-ide] >>> setup closure entered <<<");
 
-            // ── Create main window: dev server or embedded frontend ──
-            // Set REMOTE_AI_IDE_DEV_URL=http://<linux-ip>:1420 to load the
-            // frontend from a remote Vite dev server instead of the bundled dist.
+            // ── Create main window: prefer cache > dev server > embedded ──
+            //   1. REMOTE_AI_IDE_DEV_URL  →  remote Vite dev server
+            //   2. cache/frontend/index.html exists  →  cache:// protocol
+            //   3. embedded (built-in fallback)
             use tauri::WebviewUrl;
             use tauri::WebviewWindowBuilder;
+
+            let cache_frontend_index = cache_for_window.join("frontend").join("index.html");
 
             let window_result = if let Ok(dev_url) = std::env::var("REMOTE_AI_IDE_DEV_URL") {
                 log_msg!(&log_path_clone, "[remote-ai-ide] DEV MODE: loading frontend from {dev_url}");
@@ -160,8 +251,22 @@ pub fn run() {
                 } else {
                     Err(format!("failed to parse dev URL: {dev_url}"))
                 }
+            } else if cache_frontend_index.exists() {
+                log_msg!(&log_path_clone, "[remote-ai-ide] Loading frontend from cache: {}", cache_frontend_index.display());
+                let cache_url = "cache://localhost/index.html"
+                    .parse::<tauri::Url>()
+                    .map_err(|e| format!("parse cache URL: {e}"))?;
+                WebviewWindowBuilder::new(app, "main", WebviewUrl::CustomProtocol(cache_url))
+                    .title("Remote AI IDE")
+                    .inner_size(1600.0, 1000.0)
+                    .min_inner_size(900.0, 600.0)
+                    .resizable(true)
+                    .maximized(true)
+                    .visible(true)
+                    .build()
+                    .map_err(|e| format!("{e}"))
             } else {
-                log_msg!(&log_path_clone, "[remote-ai-ide] Using embedded frontend");
+                log_msg!(&log_path_clone, "[remote-ai-ide] Using embedded frontend (cache not found)");
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                     .title("Remote AI IDE")
                     .inner_size(1600.0, 1000.0)
@@ -264,6 +369,57 @@ pub fn run() {
                 });
             }
 
+            // ── Restart flag: was this a graceful restart for an update? ──
+            let restart_flag = cache_for_window.join(".restart_pending");
+            let is_graceful_restart = restart_flag.exists();
+            if is_graceful_restart {
+                log_msg!(&log_path_clone, "[remote-ai-ide] Graceful restart detected — flag at {}", restart_flag.display());
+                // Restore connections that were active before the restart.
+                // Connection configs (host, port, user, auth) are already in SQLite,
+                // loaded above by load_connections().  The flag just tells us which
+                // ones were actually connected so we can try to re-establish them.
+                if let Ok(flag_data) = std::fs::read_to_string(&restart_flag) {
+                    if let Ok(info) = serde_json::from_str::<serde_json::Value>(&flag_data) {
+                        if let Some(conns) = info.get("active_connections").and_then(|c| c.as_array()) {
+                            log_msg!(&log_path_clone, "[remote-ai-ide] Restart: {} connection(s) were active before restart", conns.len());
+                            for conn in conns {
+                                let label = conn.get("label").and_then(|v| v.as_str()).unwrap_or("");
+                                let host = conn.get("host").and_then(|v| v.as_str()).unwrap_or("");
+                                let port: u16 = conn.get("port").and_then(|v| v.as_u64()).unwrap_or(22) as u16;
+                                let user = conn.get("user").and_then(|v| v.as_str()).unwrap_or("");
+                                log_msg!(&log_path_clone, "[remote-ai-ide] Restart: connection '{label}' ({host}:{port}) was active — ready to reconnect");
+                                // Connection record already loaded from SQLite.
+                                // The frontend will see it and can reconnect on user action or auto-connect.
+                                let app_state = app_handle.state::<AppState>();
+                                if app_state.connections.get(label).is_none() {
+                                    app_state.connections.create_connection(label.to_string(), label.to_string(), host.to_string(), port, user.to_string());
+                                }
+                            }
+                        }
+                        if let Some(sessions) = info.get("active_sessions").and_then(|s| s.as_array()) {
+                            log_msg!(&log_path_clone, "[remote-ai-ide] Restart: {} session(s) were active before restart", sessions.len());
+                            for sess in sessions {
+                                let sid = sess.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+                                let cid = sess.get("connection_id").and_then(|v| v.as_str()).unwrap_or("");
+                                log_msg!(&log_path_clone, "[remote-ai-ide] Restart: session {sid} was on connection {cid}");
+                                // Re-link session to connection so UI can recover.
+                                app_handle.state::<AppState>().session_connections.insert(sid.to_string(), cid.to_string());
+                            }
+                        }
+                    }
+                }
+                // Remove the flag so we don't re-trigger on next normal start.
+                std::fs::remove_file(&restart_flag).ok();
+                log_msg!(&log_path_clone, "[remote-ai-ide] Restart flag removed — connections restored, user can reconnect");
+            }
+
+            // ── Background OTA updater ──
+            log_msg!(&log_path_clone, "[remote-ai-ide] Spawning background updater...");
+            let updater_cache = cache_for_window.clone();
+            let updater_handle = app_handle.clone();
+            updater::spawn_background_updater(updater_handle, updater_cache);
+            log_msg!(&log_path_clone, "[remote-ai-ide] Background updater spawned");
+
             tracing::info!("Remote AI IDE backend initialized");
             log_msg!(&log_path_clone, "[remote-ai-ide] Setup complete OK");
             Ok(())
@@ -305,6 +461,8 @@ pub fn run() {
             commands::approval::respond_approval,
             commands::config::load_app_config,
             commands::config::save_app_config,
+            commands::restart::prepare_restart,
+            commands::restart::check_restart_flag,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {

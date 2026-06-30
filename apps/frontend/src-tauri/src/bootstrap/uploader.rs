@@ -34,6 +34,28 @@ impl EmbeddedBinary {
 }
 
 pub fn get_embedded(arch: &str) -> Option<EmbeddedBinary> {
+    // 1. Try the OTA cache first (updated by loader.exe).
+    let cache_path = crate::cache_dir().join(format!("agent-linux-{arch}"));
+    if cache_path.exists() {
+        if let Ok(data) = std::fs::read(&cache_path) {
+            tracing::info!(
+                arch,
+                size_kb = data.len() as f64 / 1024.0,
+                "Using agent binary from cache"
+            );
+            // Leak the arch string so it lives for the program lifetime.
+            let arch_static: &'static str = Box::leak(arch.to_string().into_boxed_str());
+            // Leak the binary data for the same reason.
+            let data_static: &'static [u8] = data.leak();
+            return Some(EmbeddedBinary {
+                arch: arch_static,
+                data: data_static,
+                sha256: std::sync::OnceLock::new(),
+            });
+        }
+    }
+
+    // 2. Fallback to the compile-time embedded binary.
     match arch {
         "x86_64" => Some(EmbeddedBinary {
             arch: "x86_64",
