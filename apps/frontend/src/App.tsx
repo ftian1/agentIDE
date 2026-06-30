@@ -2,7 +2,6 @@ import { useState, useMemo, useEffect, lazy, Suspense } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { SecondarySidebar } from './components/layout/SecondarySidebar';
 import { UpdateBanner } from './components/layout/UpdateBanner';
-import { SplashScreen } from './components/layout/SplashScreen';
 import { ExplorerPanel } from './components/explorer/ExplorerPanel';
 import { ModelListPanel } from './components/models/ModelListPanel';
 import { SessionManagerPanel } from './components/session/SessionManagerPanel';
@@ -84,7 +83,6 @@ function ToolsPanel() {
 
 export function App() {
   const [showConnectionDialog, setShowConnectionDialog] = useState(false);
-  const [splashVisible, setSplashVisible] = useState(true);
   const rightPanelVisible = useLayoutStore((s) => s.rightPanelVisible);
   const toggleRightPanel = useLayoutStore((s) => s.toggleRightPanel);
   const bottomPanelTab = useLayoutStore((s) => s.bottomPanelTab);
@@ -99,10 +97,11 @@ export function App() {
   // Load persisted connections from DB on startup
   useConnectionBootstrap();
 
-  // Hide splash when the main UI is ready.
+  // Notify Rust that the frontend is loaded → close splash, show main window.
   useEffect(() => {
-    const timer = setTimeout(() => setSplashVisible(false), 1800);
-    return () => clearTimeout(timer);
+    import('@tauri-apps/api/event').then(({ emit }) => {
+      emit('frontend_ready');
+    });
   }, []);
 
   const sidebarContent = useMemo(() => {
@@ -209,7 +208,6 @@ export function App() {
 
   return (
     <>
-      <SplashScreen visible={splashVisible} />
       <UpdateBanner />
       <AppShell
         topBar={showChrome && topBarVisible ? <MenuBar rightSlot={<ConnectionBadge />} /> : undefined}

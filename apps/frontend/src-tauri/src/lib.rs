@@ -227,13 +227,31 @@ pub fn run() {
             let app_handle = app.handle().clone();
             log_msg!(&log_path_clone, "[remote-ai-ide] >>> setup closure entered <<<");
 
-            // ── Create main window: prefer cache > dev server > embedded ──
-            //   1. REMOTE_AI_IDE_DEV_URL  →  remote Vite dev server
-            //   2. cache/frontend/index.html exists  →  cache:// protocol
-            //   3. embedded (built-in fallback)
+            // ── Splash window (small, centered, frameless) ──
+            // Shows immediately while the main frontend loads.
+            use tauri::Listener;
             use tauri::WebviewUrl;
             use tauri::WebviewWindowBuilder;
 
+            let splash_result = WebviewWindowBuilder::new(app, "splash", WebviewUrl::App("splash.html".into()))
+                .title("Remote AI IDE")
+                .inner_size(340.0, 280.0)
+                .resizable(false)
+                .decorations(false)
+                .center()
+                .skip_taskbar(true)
+                .visible(true)
+                .build();
+
+            match &splash_result {
+                Ok(_) => log_msg!(&log_path_clone, "[remote-ai-ide] Splash window created"),
+                Err(e) => log_msg!(&log_path_clone, "[remote-ai-ide] Splash window FAILED: {e}"),
+            }
+
+            // ── Create main window (hidden): prefer cache > dev server > embedded ──
+            //   1. REMOTE_AI_IDE_DEV_URL  →  remote Vite dev server
+            //   2. cache/frontend/index.html exists  →  cache:// protocol
+            //   3. embedded (built-in fallback)
             let cache_frontend_index = cache_for_window.join("frontend").join("index.html");
 
             let window_result = if let Ok(dev_url) = std::env::var("REMOTE_AI_IDE_DEV_URL") {
@@ -246,7 +264,7 @@ pub fn run() {
                         .resizable(true)
                         .maximized(true)
                         .decorations(false)
-                        .visible(true)
+                        .visible(false)
                         .build()
                         .map_err(|e| format!("{e}"))
                 } else {
@@ -264,7 +282,7 @@ pub fn run() {
                     .resizable(true)
                     .maximized(true)
                     .decorations(false)
-                    .visible(true)
+                    .visible(false)
                     .build()
                     .map_err(|e| format!("{e}"))
             } else {
@@ -276,15 +294,30 @@ pub fn run() {
                     .resizable(true)
                     .maximized(true)
                     .decorations(false)
-                    .visible(true)
+                    .visible(false)
                     .build()
                     .map_err(|e| format!("{e}"))
             };
 
             match &window_result {
-                Ok(_) => log_msg!(&log_path_clone, "[remote-ai-ide] Main window created successfully"),
+                Ok(_) => log_msg!(&log_path_clone, "[remote-ai-ide] Main window created (hidden)"),
                 Err(e) => log_msg!(&log_path_clone, "[remote-ai-ide] FAILED to create main window: {e}"),
             }
+
+            // ── Listen for frontend_ready → close splash, show main ──
+            let ready_handle = app_handle.clone();
+            let ready_for_closure = app_handle.clone();
+            let log_for_ready = log_path_clone.clone();
+            ready_handle.listen("frontend_ready", move |_event: tauri::Event| {
+                log_msg!(&log_for_ready, "[remote-ai-ide] frontend ready — closing splash, showing main");
+                if let Some(splash) = ready_for_closure.get_webview_window("splash") {
+                    splash.close().ok();
+                }
+                if let Some(main) = ready_for_closure.get_webview_window("main") {
+                    main.show().ok();
+                    main.set_focus().ok();
+                }
+            });
 
             log_msg!(&log_path_clone, "[remote-ai-ide] Step 1: checking agent transport...");
             let agent_transport: Option<Arc<dyn transport::Transport>> =

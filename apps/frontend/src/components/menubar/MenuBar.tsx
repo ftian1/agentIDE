@@ -2,12 +2,13 @@
  * MenuBar — top chrome: app title + 5 menus + centered global search.
  * Also serves as the custom title bar (frameless window) with min/max/close.
  *
- * The right-side connection badge is injected by the caller (App.tsx) so this
- * stays decoupled from the connection store.
+ * The drag region covers only the logo + menus (left portion); the search
+ * input and window controls are outside it so clicks always reach them.
  */
-import type { ReactNode } from 'react';
+
+import { type ReactNode, useRef } from 'react';
 import { ExternalLink, Minus, Square, X } from 'lucide-react';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import type { Window } from '@tauri-apps/api/window';
 import { MenuDropdown } from './MenuDropdown';
 import type { MenuItemSpec } from './MenuDropdown';
 import { GlobalSearch } from './GlobalSearch';
@@ -20,8 +21,25 @@ interface Props {
 
 export function MenuBar({ rightSlot }: Props) {
   const cmd = useMenuCommands();
+  const winRef = useRef<Window | null | undefined>(undefined);
 
-  const appWindow = getCurrentWindow();
+  // Lazy-init the window handle on first interaction.
+  async function getWin(): Promise<Window | null> {
+    if (winRef.current === undefined) {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        winRef.current = getCurrentWindow();
+      } catch {
+        winRef.current = null;
+      }
+    }
+    return winRef.current;
+  }
+
+  const handleMinimize = () => { getWin().then(w => w?.minimize()); };
+  const handleToggleMaximize = () => { getWin().then(w => w?.toggleMaximize()); };
+  const handleClose = () => { getWin().then(w => w?.close()); };
+  const handleDoubleClick = () => { getWin().then(w => w?.toggleMaximize()); };
 
   const menus: { label: string; items: MenuItemSpec[] }[] = [
     {
@@ -70,42 +88,47 @@ export function MenuBar({ rightSlot }: Props) {
   ];
 
   return (
-    <div
-      data-tauri-drag-region
-      className="h-9 flex items-center gap-1 pl-2 pr-1 bg-bg-secondary border-b border-border flex-shrink-0 select-none"
-      onDoubleClick={() => appWindow.toggleMaximize()}
-    >
-      <span className="text-xs font-semibold text-text-primary px-1 whitespace-nowrap">
-        Remote AI IDE
-      </span>
-      {menus.map((m) => (
-        <MenuDropdown key={m.label} label={m.label} items={m.items} />
-      ))}
+    <div className="h-9 flex items-center gap-1 pl-2 pr-1 bg-bg-secondary border-b border-border flex-shrink-0 select-none">
+      {/* Drag region: logo + menus (left portion) */}
+      <div
+        data-tauri-drag-region
+        className="flex items-center gap-1 h-full"
+        onDoubleClick={handleDoubleClick}
+      >
+        <span className="text-xs font-semibold text-text-primary px-1 whitespace-nowrap">
+          Remote AI IDE
+        </span>
+        {menus.map((m) => (
+          <MenuDropdown key={m.label} label={m.label} items={m.items} />
+        ))}
+      </div>
 
+      {/* Search (non-drag so input always works) */}
       <div className="flex-1 flex justify-center px-4">
         <GlobalSearch />
       </div>
 
+      {/* Right slot (connection badge etc.) */}
       <div className="flex items-center gap-1">{rightSlot}</div>
 
-      {/* Window controls (frameless title bar) */}
+      {/* Window controls — outside drag region, always clickable */}
       <div className="flex items-center ml-1">
         <button
-          onClick={() => appWindow.minimize()}
+          onClick={handleMinimize}
           className="w-8 h-7 flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-tertiary rounded transition-colors"
           aria-label="Minimize"
         >
           <Minus size={14} />
         </button>
         <button
-          onClick={() => appWindow.toggleMaximize()}
+          onClick={handleToggleMaximize}
           className="w-8 h-7 flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-tertiary rounded transition-colors"
           aria-label="Maximize"
         >
           <Square size={12} />
         </button>
         <button
-          onClick={() => appWindow.close()}
+          onClick={handleClose}
           className="w-8 h-7 flex items-center justify-center text-text-secondary hover:text-white hover:bg-red-500 rounded transition-colors"
           aria-label="Close"
         >
