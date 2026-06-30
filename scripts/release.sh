@@ -122,7 +122,7 @@ if $TAURI; then
 fi
 
 # ── 5. Update manifest with loader.exe hash ─────────────────────────
-if $TAURI && [ -f "$DIST_DIR/loader.exe" ]; then
+if $TAURI && [ -f "$DIST_DIR/loader.exe" ] && [ -f "$DIST_DIR/manifest.json" ]; then
   echo "─── [5/5] Update manifest ───"
   loader_sha=$(sha256sum "$DIST_DIR/loader.exe" | awk '{print $1}')
   loader_size=$(stat -c%s "$DIST_DIR/loader.exe" 2>/dev/null || stat -f%z "$DIST_DIR/loader.exe" 2>/dev/null)
