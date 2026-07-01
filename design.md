@@ -1185,3 +1185,70 @@ cargo xwin build -p remote-ai-ide
 嵌入: build.rs → OUT_DIR → include_str! → EMBEDDED_MANIFEST_JSON
 显示: lib.rs run() 开头 log 打印
 ```
+
+---
+
+### 4.33 前端 profiling 失效：动态 import 在 Tauri WebView 中静默失败（2026-07-01 修复）
+
+**问题：** commit `24ab9e1` ("deferred IPC profiling") 把 `main.tsx` 的 Tauri IPC 初始化从
+静态 `import { invoke } from '@tauri-apps/api/core'` 改为动态 `import('@tauri-apps/api/core')`。
+真机日志显示 `frontend not ready after 10 s — forcing main window visible`，无任何 profiling 输出。
+
+**根因：** 动态 import 在 Tauri v2 WebView 中静默失败。
+- Vite 把 `import('@tauri-apps/api/core')` code-split 为独立 chunk，由浏览器动态加载
+- Tauri 的 custom protocol 环境下，chunk 加载失败 → `.catch()` 捕获错误（仅 console.error，用户不可见）
+- `invokeReady` 保持 `null` → `if (invokeReady)` 为 falsy → `frontend_ready` 永不调用
+- 10s 后 Rust fallback 强制显示主窗口（用户看到窗口出现，但无 profiling 数据）
+
+**修复：** 恢复静态 `import { invoke } from '@tauri-apps/api/core'`。Tauri 始终在页面脚本执行前
+注入 `window.__TAURI_INTERNALS__`，静态 import 的 `invoke()` 在调用时（非 import 时）访问它，
+不存在竞态。去掉了整个 deferred IPC 队列机制（ipcReady / invokeReady / pending）。
+
+**同时修复的构建脚本 bug：** `--agent-only` 无条件 `rm -rf dist/`，销毁前一步 `--frontend-only`
+的 `frontend.tar.gz`，导致 OTA manifest 缺少前端更新。改为只在全量构建时清空 dist/，
+所有增量构建（`--frontend-only` / `--agent-only` / `--tauri-only`）保留已有文件。
+
+**相关文件：** `apps/frontend/src/main.tsx`、`scripts/release.sh`
+
+---
+
+### 4.34 杀毒软件误报：剥离嵌入式二进制，改为 OTA 运行时下载（2026-07-01）
+
+**问题：** `loader.exe` 在 Windows 上被防火墙/杀毒软件识别为恶意行为，强行关闭。
+
+**根因分析（多条叠加）：**
+
+1. **无代码签名** — SmartScreen + 360/腾讯管家对所有无签名陌生 exe 报警
+2. **exe 内嵌 PE/ELF 二进制**（`include_bytes!`）— 杀软启发式扫描发现"PE 包含 PE/ELF"
+   判定为 dropper（病毒投放器）——这是最明确的恶意特征
+3. **OTA 后台下载 + 释放文件到 AppData** — 匹配下载者木马行为链
+4. **SSH 外连 + 远程 exec** — 匹配远控木马（RAT）指纹
+5. **WebView2 嵌入完整浏览器引擎** — 国产杀软对 Tauri/Electron 框架敏感
+
+**修复（按优先级）：**
+
+**本轮完成：剥离嵌入式二进制（消除 #2 dropper 误报，影响最大）**
+- `uploader.rs`：删除 `include_bytes!("../../binaries/remote-agent-host-x86_64")` 和
+  `include_bytes!("../../binaries/remote-agent-host-aarch64")`
+- `get_agent_binary(arch)` 改为异步：先查 OTA cache → 无则从 OTA server 下载 → 缓存到本地
+- `installer.rs`：`get_agent_binary(arch).await` 替代同步 `get_embedded(arch)`
+- `build.rs`：移除 `cargo:rerun-if-changed` 对 binaries/ 的跟踪
+- `loader.exe` 体积：**19M → 15M**（-4MB，即移除的嵌入式 agent 二进制）
+
+**下载机制：**
+- Windows：复用 `winhttp::get`（自动系统代理 + SSPI 认证）
+- 非 Windows：reqwest + env var 代理检测
+- 下载缓存在 `%LOCALAPPDATA%/remote-ai-ide/cache/agent-linux-*`
+- OTA 后台更新器也会预取 agent 二进制，所以首次 SSH 连接时通常已有缓存
+
+**待做（消除其余误报来源）：**
+
+| 优先级 | 措施 | 消除的误报源 | 代价 |
+|--------|------|-------------|------|
+| 1 | 提交微软恶意软件分析（免费） | Defender SmartScreen | 几分钟填表，1-3 天生效 |
+| 2 | 本地加 Defender 排除项（免费） | Defender 实时保护 | 每次部署手动执行 |
+| 3 | EV Code Signing Certificate | #1 未签名 + SmartScreen 信誉 | ~¥2000-3500/年 |
+
+**相关文件：** `apps/frontend/src-tauri/src/bootstrap/uploader.rs`、
+`apps/frontend/src-tauri/src/bootstrap/installer.rs`、`apps/frontend/src-tauri/build.rs`、
+`apps/frontend/src-tauri/binaries/`（已删除）
