@@ -129,8 +129,26 @@ fn mime_guess_for(path: &std::path::Path) -> String {
 
 /// Called from the frontend (main.tsx) after React's first render.
 /// Shows the main IDE window and closes the splash window.
+/// `timings` is a map of milestone → ms-since-script-start for profiling.
 #[tauri::command]
-fn frontend_ready(app: tauri::AppHandle) {
+fn frontend_ready(app: tauri::AppHandle, timings: Option<std::collections::HashMap<String, f64>>) {
+    if let Some(t) = &timings {
+        // Print startup profile in a compact table
+        let keys = ["imports", "listeners", "first-render", "frontend-ready"];
+        tracing::info!(
+            "frontend startup profile: imports={:.0}ms  listeners={:.0}ms  first-render={:.0}ms  total={:.0}ms",
+            t.get("imports").copied().unwrap_or(0.0),
+            t.get("listeners").copied().unwrap_or(0.0),
+            t.get("first-render").copied().unwrap_or(0.0),
+            t.get("frontend-ready").copied().unwrap_or(0.0),
+        );
+        // Print per-listener breakdown
+        for (name, ms) in t.iter() {
+            if name.starts_with("init:") && *ms > 10.0 {
+                tracing::info!("  {} = {:.0}ms", name, ms);
+            }
+        }
+    }
     if let Some(main) = app.get_webview_window("main") {
         if !main.is_visible().unwrap_or(true) {
             tracing::info!("frontend:ready — showing main window");
@@ -252,6 +270,7 @@ pub fn run() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
             log_msg!(&log_path_clone, "[remote-ai-ide] >>> setup closure entered <<<");
+            let setup_start = std::time::Instant::now();
 
             // ── Compare embedded manifest vs cached manifest ──────────
             // If embedded is newer (user downloaded a new loader.exe), clear
@@ -418,7 +437,7 @@ pub fn run() {
                 }
             });
 
-            log_msg!(&log_path_clone, "[remote-ai-ide] Step 1: checking agent transport...");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 1: checking agent transport... ({}ms)", setup_start.elapsed().as_millis());
             let agent_transport: Option<Arc<dyn transport::Transport>> =
                 if cfg!(target_os = "linux") {
                     match transport::ipc::IpcTransport::spawn() {
@@ -436,16 +455,16 @@ pub fn run() {
                     None
                 };
 
-            log_msg!(&log_path_clone, "[remote-ai-ide] Step 2: creating connection manager...");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 2: creating connection manager... ({}ms)", setup_start.elapsed().as_millis());
             let connections = connection::manager::ConnectionManager::new(app_handle.clone());
-            log_msg!(&log_path_clone, "[remote-ai-ide] Step 2 done");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 2 done ({}ms)", setup_start.elapsed().as_millis());
 
-            log_msg!(&log_path_clone, "[remote-ai-ide] Step 3: opening database...");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 3: opening database... ({}ms)", setup_start.elapsed().as_millis());
             let db = store::Database::open().expect("Failed to open database");
-            log_msg!(&log_path_clone, "[remote-ai-ide] Step 3 done");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 3 done ({}ms)", setup_start.elapsed().as_millis());
 
             // Restore persisted connections from DB into memory
-            log_msg!(&log_path_clone, "[remote-ai-ide] Step 3.5: loading persisted connections...");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 3.5: loading persisted connections... ({}ms)", setup_start.elapsed().as_millis());
             match db.load_connections() {
                 Ok(records) => {
                     for rec in &records {
@@ -476,7 +495,7 @@ pub fn run() {
             };
 
             app.manage(state);
-            log_msg!(&log_path_clone, "[remote-ai-ide] Step 4: state managed");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Step 4: state managed ({}ms)", setup_start.elapsed().as_millis());
 
             // For the local IPC agent (Linux), run the same per-connection demux
             // relay so its recv() stream is owned and acks/output are fanned out.
@@ -486,7 +505,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     commands::session::connection_demux_relay(t, handle, "local".to_string()).await;
                 });
-                log_msg!(&log_path_clone, "[remote-ai-ide] Step 5: local agent demux relay spawned");
+                log_msg!(&log_path_clone, "[remote-ai-ide] Step 5: local agent demux relay spawned ({}ms)", setup_start.elapsed().as_millis());
             }
 
             // Log WebView lifecycle for debugging renderer crashes
@@ -553,10 +572,10 @@ pub fn run() {
             let updater_cache = cache_for_window.clone();
             let updater_handle = app_handle.clone();
             updater::spawn_background_updater(updater_handle, updater_cache);
-            log_msg!(&log_path_clone, "[remote-ai-ide] Background updater spawned");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Background updater spawned ({}ms)", setup_start.elapsed().as_millis());
 
             tracing::info!("Remote AI IDE backend initialized");
-            log_msg!(&log_path_clone, "[remote-ai-ide] Setup complete OK");
+            log_msg!(&log_path_clone, "[remote-ai-ide] Setup complete OK ({}ms)", setup_start.elapsed().as_millis());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
