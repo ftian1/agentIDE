@@ -14,26 +14,29 @@
     .splash {
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
-      height: 100%; gap: 18px;
+      height: 100%; gap: 16px;
     }
     .mark { width: 64px; height: 64px; }
     .brand {
       font-size: 20px; font-weight: 700; letter-spacing: 2px;
       color: #e6edf3;
     }
-    .loader {
-      width: 200px; height: 3px;
+    .progress-wrap {
+      display: flex; align-items: center; gap: 10px;
+    }
+    .progress-track {
+      width: 180px; height: 4px;
       background: #21262d; border-radius: 2px; overflow: hidden;
     }
-    .loader-bar {
-      width: 40%; height: 100%;
+    .progress-fill {
+      width: 0%; height: 100%;
       background: linear-gradient(90deg, #58a6ff, #3fb950);
       border-radius: 2px;
-      animation: loading 1.5s ease-in-out infinite;
+      transition: width 0.3s ease-out;
     }
-    @keyframes loading {
-      0% { transform: translateX(-100%); }
-      100% { transform: translateX(350%); }
+    .progress-pct {
+      font-size: 12px; color: #8b949e; font-variant-numeric: tabular-nums;
+      width: 36px; text-align: right;
     }
   </style>
 </head>
@@ -41,27 +44,51 @@
   <div class="splash">
     <!-- Agent Prism: hexagon container + emergent spark -->
     <svg class="mark" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <!-- Outer hexagon (the container — 包含万物) -->
       <polygon points="32,4 56,18 56,46 32,60 8,46 8,18"
                stroke="#58a6ff" stroke-width="2" fill="none" opacity="0.6"/>
-      <!-- Inner structure — isometric cube faces (the system) -->
       <polygon points="32,14 50,24 32,34" fill="#58a6ff" opacity="0.12"/>
       <polygon points="32,34 50,24 50,44 32,54" fill="#58a6ff" opacity="0.08"/>
-      <polygon points="32,34 50,44 14,44 14,24" fill="none"/>
-      <!-- Core spark (the agent) -->
       <circle cx="32" cy="32" r="4" fill="#79c0ff"/>
       <circle cx="32" cy="32" r="8" fill="#58a6ff" opacity="0.15"/>
-      <!-- Emergent ray breaking through (生成万物) -->
       <line x1="32" y1="28" x2="32" y2="12" stroke="#3fb950" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
       <line x1="32" y1="14" x2="28" y2="8"  stroke="#3fb950" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
       <line x1="32" y1="14" x2="36" y2="8"  stroke="#3fb950" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
-      <!-- Subtle connection nodes -->
       <circle cx="32" cy="12" r="1.5" fill="#3fb950" opacity="0.8"/>
       <circle cx="28" cy="8" r="1" fill="#3fb950" opacity="0.5"/>
       <circle cx="36" cy="8" r="1" fill="#3fb950" opacity="0.5"/>
     </svg>
     <div class="brand">Agent IDE</div>
-    <div class="loader"><div class="loader-bar"></div></div>
+    <div class="progress-wrap">
+      <div class="progress-track">
+        <div class="progress-fill" id="bar"></div>
+      </div>
+      <div class="progress-pct" id="pct">0%</div>
+    </div>
   </div>
+  <script>
+    // Simulate loading progress: fast start → slow creep toward 90%.
+    // The actual transition to 100% happens when Rust closes this window
+    // (on frontend_ready), so we never need to hit exactly 100.
+    const bar = document.getElementById('bar');
+    const pct = document.getElementById('pct');
+    let t = 0;       // ms elapsed
+    let val = 0;     // current percent
+    const target = 90;
+
+    function ease(t) {
+      // Fast initial climb, then decelerate.  Saturates near target.
+      return target * (1 - Math.exp(-t / 1800));
+    }
+
+    function tick() {
+      t += 50;
+      val = ease(t);
+      if (val > target - 0.5) val = target - 0.5; // never quite reach 90
+      bar.style.width = val.toFixed(0) + '%';
+      pct.textContent = val.toFixed(0) + '%';
+      if (t < 12000) requestAnimationFrame(() => setTimeout(tick, 50));
+    }
+    tick();
+  </script>
 </body>
 </html>
