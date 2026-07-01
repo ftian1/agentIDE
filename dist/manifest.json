@@ -1,7 +1,9 @@
 {
-  "version": "20260701-085110",
+  "version": "20260701-085807",
   "files": {
-    "frontend.tar.gz": {"sha256": "9896cc0026c2b2a81880f29d6374baff4e9b12c3346543849b90ba2b6d0993aa", "size": 4065696}    ,
+    "agent-linux-x86_64": {"sha256": "c5247b1bae3e2eb5893952fcee42758796c4d897483b3a47cbc8123ee277968e", "size": 3751192}    ,
+    "agent-windows-x86_64": {"sha256": "70c5c06646f97665c858011372cfb9cfcf9dbe1800d1c56d639ddd41ecded3ab", "size": 3927552}    ,
+    "frontend.tar.gz": {"sha256": "5d02e53427a91fa945be053376d05e32ee5c2021a9bde3966674ffd892aef0e8", "size": 4065875}    ,
     "pricing.json": {"sha256": "fbd252379aeeb4ca004304aeabe055b4073b944b7ff3a2a9749eabc070d2e81a", "size": 10473}
   }
 }
