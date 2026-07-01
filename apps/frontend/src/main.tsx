@@ -18,6 +18,18 @@ import { initHttpEventBridge } from './lib/httpEventBridge';
 // visibility to JS succeeding, so any startup crash turned into a permanent
 // black screen. Now a crash shows the ErrorBoundary instead.
 
+// Fade out the inline splash overlay after React's first paint.
+// Double-RAF defers past the render + commit + browser-paint cycle.
+const splash = document.getElementById('splash');
+if (splash) {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      splash.style.opacity = '0';
+      splash.addEventListener('transitionend', () => splash.remove(), { once: true });
+    });
+  });
+}
+
 // Wire backend → frontend event relays once, before first render. Each is
 // isolated: a failure in one listener must not abort module load (which would
 // blank the whole app).

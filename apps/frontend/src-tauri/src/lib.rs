@@ -309,6 +309,12 @@ pub fn run() {
 
             let cache_frontend_index = cache_for_window.join("frontend").join("index.html");
 
+            // Common window config applied to all three sources.
+            // background_color prevents the white flash on WebView2 cold start;
+            // the HTML splash screen (dark bg + loading spinner) renders
+            // instantly, then React takes over.
+            let bg = tauri::webview::Color(13, 17, 23, 255); // #0d1117
+
             let window_result = if let Ok(dev_url) = std::env::var("REMOTE_AI_IDE_DEV_URL") {
                 log_msg!(&log_path_clone, "[remote-ai-ide] DEV MODE: loading frontend from {dev_url}");
                 if let Ok(u) = dev_url.parse::<tauri::Url>() {
@@ -319,6 +325,7 @@ pub fn run() {
                         .resizable(true)
                         .maximized(true)
                         .visible(true)
+                        .background_color(bg)
                         .build()
                         .map_err(|e| format!("{e}"))
                 } else {
@@ -336,6 +343,7 @@ pub fn run() {
                     .resizable(true)
                     .maximized(true)
                     .visible(true)
+                    .background_color(bg)
                     .build()
                     .map_err(|e| format!("{e}"))
             } else {
@@ -347,6 +355,7 @@ pub fn run() {
                     .resizable(true)
                     .maximized(true)
                     .visible(true)
+                    .background_color(bg)
                     .build()
                     .map_err(|e| format!("{e}"))
             };
