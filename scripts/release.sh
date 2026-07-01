@@ -48,9 +48,8 @@ if $FRONTEND; then
     echo "  [dry-run] would run: npx vite build"
   else
     START=$(date +%s)
-    (cd apps/frontend && npx vite build --outDir ../../dist-www 2>&1) | tail -3
-    tar -czf "$DIST_DIR/frontend.tar.gz" -C dist-www .
-    rm -rf dist-www
+    (cd apps/frontend && npx vite build --outDir dist 2>&1) | tail -3
+    tar -czf "$DIST_DIR/frontend.tar.gz" -C apps/frontend/dist .
     ELAPSED=$(( $(date +%s) - START ))
     echo "  frontend.tar.gz  $(du -h $DIST_DIR/frontend.tar.gz | cut -f1)  (${ELAPSED}s)"
   fi
