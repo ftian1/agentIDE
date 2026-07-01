@@ -79,5 +79,9 @@ mark('first-render');
 // and shows the main IDE window.  Send timing breakdown for the log.
 import('@tauri-apps/api/core').then(({ invoke }) => {
   mark('frontend-ready');
-  invoke('frontend_ready', { timings: marks }).catch(() => {});
+  invoke('frontend_ready', { timings: marks }).catch((e: unknown) => {
+    console.error('[startup] frontend_ready failed:', e);
+  });
+}).catch((e: unknown) => {
+  console.error('[startup] failed to import @tauri-apps/api/core:', e);
 });

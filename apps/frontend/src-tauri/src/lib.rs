@@ -131,21 +131,26 @@ fn mime_guess_for(path: &std::path::Path) -> String {
 /// Shows the main IDE window and closes the splash window.
 /// `timings` is a map of milestone → ms-since-script-start for profiling.
 #[tauri::command]
-fn frontend_ready(app: tauri::AppHandle, timings: Option<std::collections::HashMap<String, f64>>) {
-    if let Some(t) = &timings {
-        // Print startup profile in a compact table
-        let keys = ["imports", "listeners", "first-render", "frontend-ready"];
-        tracing::info!(
-            "frontend startup profile: imports={:.0}ms  listeners={:.0}ms  first-render={:.0}ms  total={:.0}ms",
-            t.get("imports").copied().unwrap_or(0.0),
-            t.get("listeners").copied().unwrap_or(0.0),
-            t.get("first-render").copied().unwrap_or(0.0),
-            t.get("frontend-ready").copied().unwrap_or(0.0),
-        );
-        // Print per-listener breakdown
-        for (name, ms) in t.iter() {
-            if name.starts_with("init:") && *ms > 10.0 {
-                tracing::info!("  {} = {:.0}ms", name, ms);
+fn frontend_ready(app: tauri::AppHandle, timings: Option<serde_json::Value>) {
+    if let Some(ref t) = timings {
+        if let Some(obj) = t.as_object() {
+            let imports = obj.get("imports").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let listeners = obj.get("listeners").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let first_render = obj.get("first-render").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let total = obj.get("frontend-ready").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            tracing::info!(
+                "frontend startup: imports={:.0}ms  listeners={:.0}ms  first-render={:.0}ms  total={:.0}ms",
+                imports, listeners, first_render, total
+            );
+            // Per-listener breakdown (>10ms only)
+            for (k, v) in obj.iter() {
+                if k.starts_with("init:") {
+                    if let Some(ms) = v.as_f64() {
+                        if ms > 10.0 {
+                            tracing::info!("  {} = {:.0}ms", k, ms);
+                        }
+                    }
+                }
             }
         }
     }
@@ -272,10 +277,38 @@ pub fn run() {
             log_msg!(&log_path_clone, "[remote-ai-ide] >>> setup closure entered <<<");
             let setup_start = std::time::Instant::now();
 
+            // ── Splash window: FIRST — create before any I/O so the user
+            // sees it immediately.  Closed by `frontend_ready` (from JS)
+            // or by a 10 s fallback timer.
+            use tauri::WebviewUrl;
+            use tauri::WebviewWindowBuilder;
+
+            let bg = tauri::webview::Color(13, 17, 23, 255); // #0d1117
+
+            let splash_start = std::time::Instant::now();
+            let splash_result = WebviewWindowBuilder::new(app, "splash", WebviewUrl::App("splash.html".into()))
+                .title("Agent IDE")
+                .inner_size(420.0, 260.0)
+                .resizable(false)
+                .decorations(false)
+                .center()
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .visible(true)
+                .background_color(bg)
+                .build()
+                .map_err(|e| format!("{e}"));
+            let splash_ms = splash_start.elapsed().as_millis();
+            match &splash_result {
+                Ok(_) => log_msg!(&log_path_clone, "[remote-ai-ide] Splash window created ({}ms)", splash_ms),
+                Err(e) => log_msg!(&log_path_clone, "[remote-ai-ide] Splash window NOT created ({}ms): {e}", splash_ms),
+            }
+
             // ── Compare embedded manifest vs cached manifest ──────────
             // If embedded is newer (user downloaded a new loader.exe), clear
             // the cache so embedded assets win over stale OTA-cached ones.
             // Otherwise keep the cache (OTA updates or same version).
+            // Moved AFTER splash creation so the user sees the splash during I/O.
             let embedded_manifest: manifest::Manifest =
                 serde_json::from_str(manifest::EMBEDDED_MANIFEST_JSON)
                     .unwrap_or_else(|e| {
@@ -332,31 +365,6 @@ pub fn run() {
                 }
             } else {
                 log_msg!(&log_path_clone, "[remote-ai-ide] No cache manifest — will use embedded assets");
-            }
-
-            // ── Splash window: small, centered, frameless, always-on-top ──
-            // Shows instantly before the main IDE window.  Closed by the
-            // `frontend_ready` Tauri command (called from main.tsx after
-            // React renders) or by a 10 s fallback timer.
-            use tauri::WebviewUrl;
-            use tauri::WebviewWindowBuilder;
-
-            let bg = tauri::webview::Color(13, 17, 23, 255); // #0d1117
-
-            let splash_result = WebviewWindowBuilder::new(app, "splash", WebviewUrl::App("splash.html".into()))
-                .title("Remote AI IDE")
-                .inner_size(420.0, 260.0)
-                .resizable(false)
-                .decorations(false)
-                .center()
-                .always_on_top(true)
-                .skip_taskbar(true)
-                .visible(true)
-                .build()
-                .map_err(|e| format!("{e}"));
-            match &splash_result {
-                Ok(_) => log_msg!(&log_path_clone, "[remote-ai-ide] Splash window created"),
-                Err(e) => log_msg!(&log_path_clone, "[remote-ai-ide] Splash window NOT created (maybe first dev build?): {e}"),
             }
 
             // ── Create main window (hidden): prefer cache > dev server > embedded ──
