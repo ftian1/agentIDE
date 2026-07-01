@@ -12,14 +12,14 @@ import { initHttpTrafficListeners } from './stores/httpTrafficStore';
 import { initFileTreeListeners } from './stores/fileTreeCacheStore';
 import { initHttpEventBridge } from './lib/httpEventBridge';
 
-// The window is created visible with a dark native backgroundColor (#0d1117),
-// which alone prevents the white WebView2 cold-start flash. We deliberately do
-// NOT hide the window and reveal it from JS: that coupled the window's
-// visibility to JS succeeding, so any startup crash turned into a permanent
-// black screen. Now a crash shows the ErrorBoundary instead.
+// Startup: a small native splash window (Rust-side, centered, frameless)
+// is shown first.  The main IDE window starts hidden.  Once React renders,
+// we call `frontend_ready` to close the splash and reveal the main window.
+// A 10 s Rust-side fallback prevents permanent-hidden-window deadlock if
+// JS crashes — same safety as the old ErrorBoundary approach.
 
-// Fade out the inline splash overlay after React's first paint.
-// Double-RAF defers past the render + commit + browser-paint cycle.
+// Fade out the inline HTML splash overlay (safety net inside the main
+// window, in case the native splash window failed to create).
 const splash = document.getElementById('splash');
 if (splash) {
   requestAnimationFrame(() => {
@@ -29,6 +29,12 @@ if (splash) {
     });
   });
 }
+
+// Notify Rust that React is ready — closes the native splash window
+// and shows the main IDE window.
+import('@tauri-apps/api/core').then(({ invoke }) => {
+  invoke('frontend_ready').catch(() => {});
+});
 
 // Wire backend → frontend event relays once, before first render. Each is
 // isolated: a failure in one listener must not abort module load (which would

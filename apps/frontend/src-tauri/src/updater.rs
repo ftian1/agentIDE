@@ -142,7 +142,7 @@ async fn check_and_update(
                 .unwrap_or(false);
 
             if cached_match {
-                tracing::info!(
+                tracing::debug!(
                     "updater: {} missing but cached manifest hash matches remote — skipping download",
                     name
                 );
@@ -293,7 +293,7 @@ mod http {
         if let Some(proxy_url) = detect_proxy_url() {
             match reqwest::Proxy::all(&proxy_url) {
                 Ok(p) => {
-                    tracing::info!(%proxy_url, "updater: using detected proxy");
+                    tracing::debug!(%proxy_url, "updater: using detected proxy");
                     builder = builder.proxy(p);
                     builder = builder.danger_accept_invalid_certs(true);
                 }
@@ -302,7 +302,7 @@ mod http {
                 }
             }
         } else {
-            tracing::info!("updater: no proxy detected");
+            tracing::debug!("updater: no proxy detected");
         }
 
         Ok(builder.build()?)
@@ -313,7 +313,7 @@ mod http {
             if let Ok(val) = std::env::var(key) {
                 let val = val.trim().to_string();
                 if !val.is_empty() {
-                    tracing::info!(key, %val, "updater: proxy from env");
+                    tracing::debug!(key, %val, "updater: proxy from env");
                     return Some(val);
                 }
             }

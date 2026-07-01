@@ -49,6 +49,7 @@ if $FRONTEND; then
   else
     START=$(date +%s)
     (cd apps/frontend && npx vite build --outDir dist 2>&1) | tail -3
+    cp apps/frontend/splash.html apps/frontend/dist/splash.html
     tar -czf "$DIST_DIR/frontend.tar.gz" -C apps/frontend/dist .
     ELAPSED=$(( $(date +%s) - START ))
     echo "  frontend.tar.gz  $(du -h $DIST_DIR/frontend.tar.gz | cut -f1)  (${ELAPSED}s)"

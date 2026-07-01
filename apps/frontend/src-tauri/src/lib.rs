@@ -127,6 +127,21 @@ fn mime_guess_for(path: &std::path::Path) -> String {
     .to_string()
 }
 
+/// Called from the frontend (main.tsx) after React's first render.
+/// Shows the main IDE window and closes the splash window.
+#[tauri::command]
+fn frontend_ready(app: tauri::AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        if !main.is_visible().unwrap_or(true) {
+            tracing::info!("frontend:ready — showing main window");
+            main.show().ok();
+        }
+    }
+    if let Some(splash) = app.get_webview_window("splash") {
+        splash.close().ok();
+    }
+}
+
 pub fn run() {
     let log_path = std::env::temp_dir().join("remote-ai-ide.log");
     let log_path_str = log_path.to_string_lossy().to_string();
@@ -300,20 +315,36 @@ pub fn run() {
                 log_msg!(&log_path_clone, "[remote-ai-ide] No cache manifest — will use embedded assets");
             }
 
-            // ── Create main window: prefer cache > dev server > embedded ──
-            //   1. REMOTE_AI_IDE_DEV_URL  →  remote Vite dev server
-            //   2. cache/frontend/index.html exists  →  cache:// protocol
-            //   3. embedded (built-in fallback)
+            // ── Splash window: small, centered, frameless, always-on-top ──
+            // Shows instantly before the main IDE window.  Closed by the
+            // `frontend_ready` Tauri command (called from main.tsx after
+            // React renders) or by a 10 s fallback timer.
             use tauri::WebviewUrl;
             use tauri::WebviewWindowBuilder;
 
-            let cache_frontend_index = cache_for_window.join("frontend").join("index.html");
-
-            // Common window config applied to all three sources.
-            // background_color prevents the white flash on WebView2 cold start;
-            // the HTML splash screen (dark bg + loading spinner) renders
-            // instantly, then React takes over.
             let bg = tauri::webview::Color(13, 17, 23, 255); // #0d1117
+
+            let splash_result = WebviewWindowBuilder::new(app, "splash", WebviewUrl::App("splash.html".into()))
+                .title("Remote AI IDE")
+                .inner_size(420.0, 260.0)
+                .resizable(false)
+                .decorations(false)
+                .center()
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .visible(true)
+                .build()
+                .map_err(|e| format!("{e}"));
+            match &splash_result {
+                Ok(_) => log_msg!(&log_path_clone, "[remote-ai-ide] Splash window created"),
+                Err(e) => log_msg!(&log_path_clone, "[remote-ai-ide] Splash window NOT created (maybe first dev build?): {e}"),
+            }
+
+            // ── Create main window (hidden): prefer cache > dev server > embedded ──
+            //   1. REMOTE_AI_IDE_DEV_URL  →  remote Vite dev server
+            //   2. cache/frontend/index.html exists  →  cache:// protocol
+            //   3. embedded (built-in fallback)
+            let cache_frontend_index = cache_for_window.join("frontend").join("index.html");
 
             let window_result = if let Ok(dev_url) = std::env::var("REMOTE_AI_IDE_DEV_URL") {
                 log_msg!(&log_path_clone, "[remote-ai-ide] DEV MODE: loading frontend from {dev_url}");
@@ -324,7 +355,7 @@ pub fn run() {
                         .min_inner_size(900.0, 600.0)
                         .resizable(true)
                         .maximized(true)
-                        .visible(true)
+                        .visible(false)
                         .background_color(bg)
                         .build()
                         .map_err(|e| format!("{e}"))
@@ -342,7 +373,7 @@ pub fn run() {
                     .min_inner_size(900.0, 600.0)
                     .resizable(true)
                     .maximized(true)
-                    .visible(true)
+                    .visible(false)
                     .background_color(bg)
                     .build()
                     .map_err(|e| format!("{e}"))
@@ -354,16 +385,38 @@ pub fn run() {
                     .min_inner_size(900.0, 600.0)
                     .resizable(true)
                     .maximized(true)
-                    .visible(true)
+                    .visible(false)
                     .background_color(bg)
                     .build()
                     .map_err(|e| format!("{e}"))
             };
 
             match &window_result {
-                Ok(_) => log_msg!(&log_path_clone, "[remote-ai-ide] Main window created successfully"),
-                Err(e) => log_msg!(&log_path_clone, "[remote-ai-ide] FAILED to create main window: {e}"),
+                Ok(_) => log_msg!(&log_path_clone, "[remote-ai-ide] Main window created (hidden)"),
+                Err(e) => {
+                    log_msg!(&log_path_clone, "[remote-ai-ide] FAILED to create main window: {e}");
+                    // Main window failed — show whatever we can.  Close splash
+                    // so the user isn't stuck staring at it.
+                    if let Ok(s) = splash_result {
+                        s.close().ok();
+                    }
+                }
             }
+
+            // ── Fallback: if frontend doesn't report ready in 10 s, force-show ──
+            let app_for_timer = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                if let Some(main) = app_for_timer.get_webview_window("main") {
+                    if !main.is_visible().unwrap_or(true) {
+                        tracing::warn!("frontend not ready after 10 s — forcing main window visible");
+                        main.show().ok();
+                    }
+                }
+                if let Some(splash) = app_for_timer.get_webview_window("splash") {
+                    splash.close().ok();
+                }
+            });
 
             log_msg!(&log_path_clone, "[remote-ai-ide] Step 1: checking agent transport...");
             let agent_transport: Option<Arc<dyn transport::Transport>> =
@@ -545,6 +598,7 @@ pub fn run() {
             commands::config::save_app_config,
             commands::restart::prepare_restart,
             commands::restart::check_restart_flag,
+            frontend_ready,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|e| {
