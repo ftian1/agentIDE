@@ -30,8 +30,19 @@ for arg in "$@"; do
 done
 
 DIST_DIR="dist"
-rm -rf "$DIST_DIR"
-mkdir -p "$DIST_DIR"
+
+# ── Clean dist/: only when building the full set ──
+# --tauri-only is designed to run AFTER --frontend-only and/or --agent-only;
+# loader.exe depends on the files they place in dist/.  Wiping dist/ here
+# would erase the dependency files and prevent build.rs from detecting them.
+if $TAURI && ! $FRONTEND && ! $AGENT; then
+  # --tauri-only: keep existing dist/ files, only update loader.exe
+  echo "─── Tauri-only mode: keeping existing dist/ files ───"
+  mkdir -p "$DIST_DIR"
+else
+  rm -rf "$DIST_DIR"
+  mkdir -p "$DIST_DIR"
+fi
 
 VERSION="$(date -u +%Y-%m-%d).$(git rev-parse --short=7 HEAD 2>/dev/null || echo '0000000')"
 echo ""
@@ -80,7 +91,31 @@ fi
 # MUST run before the tauri build — build.rs embeds dist/manifest.json
 # into loader.exe so startup can compare embedded-vs-cached versions.
 # loader.exe itself is NOT in the manifest; only cache-updatable files.
-if $PRICING; then
+#
+# When --tauri-only is used with existing dist/ files (from a prior
+# --frontend-only or --agent-only), regenerate the full manifest instead
+# of overwriting it with a version-only stub.
+if $TAURI && ! $FRONTEND && ! $AGENT && ! $PRICING; then
+  # --tauri-only with existing dist/: regenerate full manifest
+  echo "─── [3/4] Manifest (regenerated from existing dist/) ───"
+  MANIFEST="$DIST_DIR/manifest.json"
+  echo "{" > "$MANIFEST"
+  echo "  \"version\": \"$VERSION\"," >> "$MANIFEST"
+  echo "  \"files\": {" >> "$MANIFEST"
+  FIRST=true
+  for f in $(ls "$DIST_DIR" | grep -v -E 'manifest.json|loader.exe' | sort); do
+    path="$DIST_DIR/$f"
+    sha=$(sha256sum "$path" | awk '{print $1}')
+    size=$(stat -c%s "$path" 2>/dev/null || stat -f%z "$path" 2>/dev/null)
+    if ! $FIRST; then echo "    ," >> "$MANIFEST"; fi
+    FIRST=false
+    printf '    "%s": {"sha256": "%s", "size": %d}' "$f" "$sha" "$size" >> "$MANIFEST"
+  done
+  echo "" >> "$MANIFEST"
+  echo "  }" >> "$MANIFEST"
+  echo "}" >> "$MANIFEST"
+  echo "  manifest.json  $(wc -c < $MANIFEST) bytes"
+elif $PRICING; then
   echo "─── [3/4] Pricing + Manifest ───"
   cp pricing.json "$DIST_DIR/pricing.json"
 
@@ -125,6 +160,10 @@ if $TAURI; then
   if $DRY_RUN; then
     echo "  [dry-run] cargo xwin build -p remote-ai-ide"
   else
+    # Touch sentinel to force cargo to re-embed the latest frontend assets.
+    # (cargo:rerun-if-changed on directories only detects file add/remove;
+    # a sentinel file provides reliable detection of frontend content changes.)
+    touch apps/frontend/dist/.sentinel 2>/dev/null || true
     START=$(date +%s)
     cargo xwin build --target x86_64-pc-windows-msvc --release -p remote-ai-ide 2>&1 | grep -E "Finished|error" || true
     cp target/x86_64-pc-windows-msvc/release/remote-ai-ide.exe "$DIST_DIR/loader.exe"
