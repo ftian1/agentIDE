@@ -20,14 +20,16 @@ use crate::manifest::{FileEntry, Manifest};
 /// Base URL for downloading dist files.
 const DIST_BASE: &str = "https://raw.githubusercontent.com/ftian1/agentIDE/main/dist/";
 
-/// Build the manifest URL with a cache-busting `?v=` query param.
-/// raw.githubusercontent.com CDN caches for 1–5 min; the version changes
-/// each release, so each new loader.exe gets a fresh CDN cache key.
+/// Build the manifest URL with a cache-busting `?t=` query param.
+/// raw.githubusercontent.com CDN caches for up to 5 min; using the
+/// current Unix timestamp (seconds) ensures each poll cycle gets a fresh
+/// cache key, so newly pushed releases are visible immediately.
 fn manifest_url() -> String {
-    let version = serde_json::from_str::<Manifest>(crate::manifest::EMBEDDED_MANIFEST_JSON)
-        .map(|m| m.version)
-        .unwrap_or_else(|_| "unknown".into());
-    format!("{DIST_BASE}manifest.json?v={version}")
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{DIST_BASE}manifest.json?t={now}")
 }
 /// Wait this long after startup before the first check, so the UI has time to load.
 const INITIAL_DELAY_SECS: u64 = 10;
