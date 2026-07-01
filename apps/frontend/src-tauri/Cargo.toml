@@ -35,18 +35,18 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 flate2 = "1"
 tar = "0.4"
-
-[target.'cfg(windows)'.dependencies]
-winreg = "0.52"
-windows-sys = { version = "0.48", features = ["Win32_Networking_WinHttp", "Win32_Foundation"] }
 async-trait = "0.1"
-dirs = "6"
-bytes = "1"
-which = "7"
+sha2 = "0.10"
 
 # SSH support (optional during development)
 russh = { version = "0.61", optional = true }
 ssh-key = { version = "0.6", features = ["ed25519"], optional = true }
 base64 = { version = "0.22", optional = true }
-sha2 = "0.10"
 shell-words = { version = "1", optional = true }
+dirs = "6"
+bytes = "1"
+which = "7"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
+windows-sys = { version = "0.48", features = ["Win32_Networking_WinHttp", "Win32_Foundation"] }
