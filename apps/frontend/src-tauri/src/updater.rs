@@ -69,17 +69,13 @@ pub fn spawn_background_updater(app_handle: AppHandle, cache_dir: PathBuf) {
                     });
                 }
                 Ok(None) => {
-                    tracing::info!("updater: all components up to date");
+                    // quiet — no changes
                 }
                 Err(e) => {
                     tracing::warn!("updater: check failed: {e}");
                 }
             }
 
-            tracing::info!(
-                "updater: sleeping {}s until next check",
-                CHECK_INTERVAL_SECS
-            );
             tokio::time::sleep(Duration::from_secs(CHECK_INTERVAL_SECS)).await;
         }
     });
@@ -95,7 +91,7 @@ async fn check_and_update(
 
     // 1. Fetch manifest.
     let manifest = fetch_manifest(cache_dir).await?;
-    tracing::info!(
+    tracing::debug!(
         "updater: manifest version={}, {} files",
         manifest.version,
         manifest.files.len()
@@ -211,7 +207,7 @@ mod http {
 
     pub async fn fetch_manifest(cache_dir: &Path) -> anyhow::Result<Manifest> {
         let url = MANIFEST_URL.to_string();
-        tracing::info!("updater: fetching manifest from {url}");
+        tracing::debug!("updater: fetching manifest from {url}");
 
         let text = tokio::task::spawn_blocking(move || {
             let body = get_blocking(&url)?;
@@ -320,7 +316,7 @@ mod http {
     pub async fn fetch_manifest(cache_dir: &Path) -> anyhow::Result<Manifest> {
         let client = build_reqwest_client(FETCH_TIMEOUT_SECS)?;
 
-        tracing::info!("updater: fetching manifest from {MANIFEST_URL}");
+        tracing::debug!("updater: fetching manifest from {MANIFEST_URL}");
         let resp = client
             .get(MANIFEST_URL)
             .header("User-Agent", "remote-ai-ide-updater/0.1")
