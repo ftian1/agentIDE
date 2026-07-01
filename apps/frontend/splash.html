@@ -2,26 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Remote AI IDE</title>
+  <title>Agent IDE</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body {
       height: 100%; overflow: hidden;
       background: #0d1117;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      -webkit-app-region: drag;  /* allow dragging frameless window */
+      -webkit-app-region: drag;
     }
     .splash {
       display: flex; flex-direction: column;
       align-items: center; justify-content: center;
-      height: 100%; gap: 20px;
+      height: 100%; gap: 18px;
     }
-    .logo {
-      font-size: 22px; font-weight: 700; letter-spacing: 1px;
+    .mark { width: 64px; height: 64px; }
+    .brand {
+      font-size: 20px; font-weight: 700; letter-spacing: 2px;
       color: #e6edf3;
     }
     .loader {
-      width: 200px; height: 4px;
+      width: 200px; height: 3px;
       background: #21262d; border-radius: 2px; overflow: hidden;
     }
     .loader-bar {
@@ -38,7 +39,28 @@
 </head>
 <body>
   <div class="splash">
-    <div class="logo">Remote AI IDE</div>
+    <!-- Agent Prism: hexagon container + emergent spark -->
+    <svg class="mark" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Outer hexagon (the container — 包含万物) -->
+      <polygon points="32,4 56,18 56,46 32,60 8,46 8,18"
+               stroke="#58a6ff" stroke-width="2" fill="none" opacity="0.6"/>
+      <!-- Inner structure — isometric cube faces (the system) -->
+      <polygon points="32,14 50,24 32,34" fill="#58a6ff" opacity="0.12"/>
+      <polygon points="32,34 50,24 50,44 32,54" fill="#58a6ff" opacity="0.08"/>
+      <polygon points="32,34 50,44 14,44 14,24" fill="none"/>
+      <!-- Core spark (the agent) -->
+      <circle cx="32" cy="32" r="4" fill="#79c0ff"/>
+      <circle cx="32" cy="32" r="8" fill="#58a6ff" opacity="0.15"/>
+      <!-- Emergent ray breaking through (生成万物) -->
+      <line x1="32" y1="28" x2="32" y2="12" stroke="#3fb950" stroke-width="2" stroke-linecap="round" opacity="0.9"/>
+      <line x1="32" y1="14" x2="28" y2="8"  stroke="#3fb950" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+      <line x1="32" y1="14" x2="36" y2="8"  stroke="#3fb950" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+      <!-- Subtle connection nodes -->
+      <circle cx="32" cy="12" r="1.5" fill="#3fb950" opacity="0.8"/>
+      <circle cx="28" cy="8" r="1" fill="#3fb950" opacity="0.5"/>
+      <circle cx="36" cy="8" r="1" fill="#3fb950" opacity="0.5"/>
+    </svg>
+    <div class="brand">Agent IDE</div>
     <div class="loader"><div class="loader-bar"></div></div>
   </div>
 </body>
