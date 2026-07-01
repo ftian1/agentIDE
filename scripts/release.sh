@@ -32,15 +32,16 @@ done
 DIST_DIR="dist"
 
 # ── Clean dist/: only when building the full set ──
-# --tauri-only is designed to run AFTER --frontend-only and/or --agent-only;
-# loader.exe depends on the files they place in dist/.  Wiping dist/ here
-# would erase the dependency files and prevent build.rs from detecting them.
-if $TAURI && ! $FRONTEND && ! $AGENT; then
-  # --tauri-only: keep existing dist/ files, only update loader.exe
-  echo "─── Tauri-only mode: keeping existing dist/ files ───"
+# Partial builds (--frontend-only, --agent-only, --tauri-only) are designed
+# to run in sequence.  Each step places files in dist/ that later steps
+# depend on.  Wiping dist/ between steps erases those dependencies.
+if $FRONTEND && $AGENT && $TAURI; then
+  # Full build: start from a clean dist/
+  rm -rf "$DIST_DIR"
   mkdir -p "$DIST_DIR"
 else
-  rm -rf "$DIST_DIR"
+  # Partial build: keep existing dist/ files from prior steps
+  echo "─── Partial mode: keeping existing dist/ files ───"
   mkdir -p "$DIST_DIR"
 fi
 
