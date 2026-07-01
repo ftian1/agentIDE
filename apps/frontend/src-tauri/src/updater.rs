@@ -17,8 +17,18 @@ use crate::manifest::{FileEntry, Manifest};
 
 // ── Config ──────────────────────────────────────────────────────────
 
-const MANIFEST_URL: &str =
-    "https://raw.githubusercontent.com/ftian1/agentIDE/main/dist/manifest.json";
+/// Base URL for downloading dist files.
+const DIST_BASE: &str = "https://raw.githubusercontent.com/ftian1/agentIDE/main/dist/";
+
+/// Build the manifest URL with a cache-busting `?v=` query param.
+/// raw.githubusercontent.com CDN caches for 1–5 min; the version changes
+/// each release, so each new loader.exe gets a fresh CDN cache key.
+fn manifest_url() -> String {
+    let version = serde_json::from_str::<Manifest>(crate::manifest::EMBEDDED_MANIFEST_JSON)
+        .map(|m| m.version)
+        .unwrap_or_else(|_| "unknown".into());
+    format!("{DIST_BASE}manifest.json?v={version}")
+}
 /// Wait this long after startup before the first check, so the UI has time to load.
 const INITIAL_DELAY_SECS: u64 = 10;
 /// Interval between subsequent manifest checks.
@@ -206,7 +216,7 @@ mod http {
     }
 
     pub async fn fetch_manifest(cache_dir: &Path) -> anyhow::Result<Manifest> {
-        let url = MANIFEST_URL.to_string();
+        let url = manifest_url();
         tracing::debug!("updater: fetching manifest from {url}");
 
         let text = tokio::task::spawn_blocking(move || {
@@ -227,11 +237,7 @@ mod http {
         entry: &FileEntry,
         cache_dir: &Path,
     ) -> anyhow::Result<()> {
-        let base = MANIFEST_URL
-            .rsplit_once('/')
-            .map(|(b, _)| format!("{b}/"))
-            .unwrap_or_default();
-        let url = format!("{base}{name}");
+        let url = format!("{DIST_BASE}{name}");
         let name = name.to_string();
         let cache_dir = cache_dir.to_path_buf();
         let sha256_expected = entry.sha256.clone();
@@ -316,9 +322,10 @@ mod http {
     pub async fn fetch_manifest(cache_dir: &Path) -> anyhow::Result<Manifest> {
         let client = build_reqwest_client(FETCH_TIMEOUT_SECS)?;
 
-        tracing::debug!("updater: fetching manifest from {MANIFEST_URL}");
+        let url = manifest_url();
+        tracing::debug!("updater: fetching manifest from {url}");
         let resp = client
-            .get(MANIFEST_URL)
+            .get(&url)
             .header("User-Agent", "remote-ai-ide-updater/0.1")
             .send()
             .await?;
@@ -341,11 +348,7 @@ mod http {
         entry: &FileEntry,
         cache_dir: &Path,
     ) -> anyhow::Result<()> {
-        let base = MANIFEST_URL
-            .rsplit_once('/')
-            .map(|(b, _)| format!("{b}/"))
-            .unwrap_or_default();
-        let url = format!("{base}{name}");
+        let url = format!("{DIST_BASE}{name}");
 
         let client = build_reqwest_client(DOWNLOAD_TIMEOUT_SECS)?;
 
