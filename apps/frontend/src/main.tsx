@@ -11,35 +11,21 @@ import { initPerfListeners } from './stores/perfStore';
 import { initHttpTrafficListeners } from './stores/httpTrafficStore';
 import { initFileTreeListeners } from './stores/fileTreeCacheStore';
 import { initHttpEventBridge } from './lib/httpEventBridge';
+import { invoke } from '@tauri-apps/api/core';
 
 // ── Startup profiling ──────────────────────────────────────────────
-// Each milestone is queued during sync module eval, then flushed
-// asynchronously once the Tauri IPC bridge is guaranteed ready.
-// This avoids the silent-failure case where invoke() is called before
-// window.__TAURI_INTERNALS__ is injected.
+// Each milestone is sent to Rust IMMEDIATELY (not just at the end), so
+// even if the frontend hangs later, the log shows exactly how far it got.
+// Static import of @tauri-apps/api/core works because Tauri injects
+// window.__TAURI_INTERNALS__ before any page JavaScript executes.
 const t0 = performance.now();
 const marks: Record<string, number> = {};
-const pending: Array<{ name: string; ms: number }> = [];
-let invokeReady: ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null = null;
-
 function mark(label: string) {
   const ms = +(performance.now() - t0).toFixed(1);
   marks[label] = ms;
-  pending.push({ name: label, ms });
+  // Fire-and-forget: don't block on the IPC call, don't crash if it fails
+  invoke('frontend_milestone', { name: label, ms }).catch(() => {});
 }
-
-// Deferred IPC setup: dynamic import ensures the module resolves after
-// Tauri's initialization script has injected __TAURI_INTERNALS__.
-const ipcReady = import('@tauri-apps/api/core').then(({ invoke }) => {
-  invokeReady = invoke;
-  // Flush queued milestones
-  for (const m of pending) {
-    invoke('frontend_milestone', { name: m.name, ms: m.ms }).catch(() => {});
-  }
-  pending.length = 0;
-}).catch((e: unknown) => {
-  console.error('[startup] failed to import @tauri-apps/api/core:', e);
-});
 
 // Startup: a small native splash window (Rust-side, centered, frameless)
 // is shown first.  The main IDE window starts hidden.  Once React renders,
@@ -100,17 +86,6 @@ mark('first-render');
 // Notify Rust that React is ready — closes the native splash window
 // and shows the main IDE window.  Send timing breakdown for the log.
 mark('frontend-ready');
-
-// Wait for IPC to be ready, flush any remaining milestones, then notify Rust.
-ipcReady.then(() => {
-  // Flush any milestones queued after the initial batch
-  if (invokeReady) {
-    for (const m of pending) {
-      invokeReady('frontend_milestone', { name: m.name, ms: m.ms }).catch(() => {});
-    }
-    pending.length = 0;
-    invokeReady('frontend_ready', { timings: marks }).catch((e: unknown) => {
-      console.error('[startup] frontend_ready failed:', e);
-    });
-  }
+invoke('frontend_ready', { timings: marks }).catch((e: unknown) => {
+  console.error('[startup] frontend_ready failed:', e);
 });
