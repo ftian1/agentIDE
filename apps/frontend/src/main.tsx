@@ -11,12 +11,18 @@ import { initPerfListeners } from './stores/perfStore';
 import { initHttpTrafficListeners } from './stores/httpTrafficStore';
 import { initFileTreeListeners } from './stores/fileTreeCacheStore';
 import { initHttpEventBridge } from './lib/httpEventBridge';
+import { invoke } from '@tauri-apps/api/core';
 
 // ── Startup profiling ──────────────────────────────────────────────
+// Each milestone is sent to Rust IMMEDIATELY (not just at the end), so
+// even if the frontend hangs later, the log shows exactly how far it got.
 const t0 = performance.now();
 const marks: Record<string, number> = {};
 function mark(label: string) {
-  marks[label] = +(performance.now() - t0).toFixed(1);
+  const ms = +(performance.now() - t0).toFixed(1);
+  marks[label] = ms;
+  // Fire-and-forget: don't block on the IPC call, don't crash if it fails
+  invoke('frontend_milestone', { name: label, ms }).catch(() => {});
 }
 
 // Startup: a small native splash window (Rust-side, centered, frameless)
@@ -49,7 +55,7 @@ function safeInit(name: string, fn: () => void) {
   } catch (e) {
     console.error(`[init] ${name} failed:`, e);
   }
-  marks['init:' + name] = +(performance.now() - s).toFixed(1);
+  mark('init:' + name);
 }
 safeInit('approval', initApprovalListeners);
 safeInit('agent', initAgentListeners);
@@ -77,11 +83,7 @@ mark('first-render');
 
 // Notify Rust that React is ready — closes the native splash window
 // and shows the main IDE window.  Send timing breakdown for the log.
-import('@tauri-apps/api/core').then(({ invoke }) => {
-  mark('frontend-ready');
-  invoke('frontend_ready', { timings: marks }).catch((e: unknown) => {
-    console.error('[startup] frontend_ready failed:', e);
-  });
-}).catch((e: unknown) => {
-  console.error('[startup] failed to import @tauri-apps/api/core:', e);
+mark('frontend-ready');
+invoke('frontend_ready', { timings: marks }).catch((e: unknown) => {
+  console.error('[startup] frontend_ready failed:', e);
 });

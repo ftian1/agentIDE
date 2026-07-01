@@ -10,7 +10,7 @@ fn main() {
     std::panic::set_hook(Box::new(move |info| {
         // Try to write crash info to a known location
         let crash_msg = format!(
-            "Remote AI IDE crashed:\n\
+            "Agent IDE crashed:\n\
              Location: {:?}\n\
              Message: {}\n",
             info.location(),

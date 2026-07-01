@@ -1,4 +1,4 @@
-//! Remote AI IDE — Tauri v2 Desktop Backend.
+//! Agent IDE — Tauri v2 Desktop Backend.
 
 pub mod commands;
 pub mod connection;
@@ -125,6 +125,14 @@ fn mime_guess_for(path: &std::path::Path) -> String {
         _ => "application/octet-stream",
     }
     .to_string()
+}
+
+/// Called from the frontend (main.tsx) at each startup milestone.
+/// Logged immediately so even if the frontend hangs later, we see how far
+/// it got.  `ms` is milliseconds since the script started.
+#[tauri::command]
+fn frontend_milestone(name: String, ms: f64) {
+    tracing::info!("frontend milestone: {} at {:.0}ms", name, ms);
 }
 
 /// Called from the frontend (main.tsx) after React's first render.
@@ -377,7 +385,7 @@ pub fn run() {
                 log_msg!(&log_path_clone, "[remote-ai-ide] DEV MODE: loading frontend from {dev_url}");
                 if let Ok(u) = dev_url.parse::<tauri::Url>() {
                     WebviewWindowBuilder::new(app, "main", WebviewUrl::External(u))
-                        .title("Remote AI IDE [DEV]")
+                        .title("Agent IDE [DEV]")
                         .inner_size(1600.0, 1000.0)
                         .min_inner_size(900.0, 600.0)
                         .resizable(true)
@@ -395,7 +403,7 @@ pub fn run() {
                     .parse::<tauri::Url>()
                     .map_err(|e| format!("parse cache URL: {e}"))?;
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::CustomProtocol(cache_url))
-                    .title("Remote AI IDE")
+                    .title("Agent IDE")
                     .inner_size(1600.0, 1000.0)
                     .min_inner_size(900.0, 600.0)
                     .resizable(true)
@@ -407,7 +415,7 @@ pub fn run() {
             } else {
                 log_msg!(&log_path_clone, "[remote-ai-ide] Using embedded frontend (cache not found)");
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                    .title("Remote AI IDE")
+                    .title("Agent IDE")
                     .inner_size(1600.0, 1000.0)
                     .min_inner_size(900.0, 600.0)
                     .resizable(true)
@@ -582,7 +590,7 @@ pub fn run() {
             updater::spawn_background_updater(updater_handle, updater_cache);
             log_msg!(&log_path_clone, "[remote-ai-ide] Background updater spawned ({}ms)", setup_start.elapsed().as_millis());
 
-            tracing::info!("Remote AI IDE backend initialized");
+            tracing::info!("Agent IDE backend initialized");
             log_msg!(&log_path_clone, "[remote-ai-ide] Setup complete OK ({}ms)", setup_start.elapsed().as_millis());
             Ok(())
         })
@@ -625,6 +633,7 @@ pub fn run() {
             commands::config::save_app_config,
             commands::restart::prepare_restart,
             commands::restart::check_restart_flag,
+            frontend_milestone,
             frontend_ready,
         ])
         .run(tauri::generate_context!())
