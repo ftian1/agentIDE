@@ -123,8 +123,26 @@ async fn check_and_update(
                 }
             }
         } else {
-            tracing::info!("updater: {} missing, will download", name);
-            true
+            // File missing from cache — but the cached manifest (written
+            // from embedded on first start) might have a matching hash.
+            // If so, the embedded copy is identical to remote → skip download.
+            let cached_match = std::fs::read_to_string(cache_dir.join("manifest.json"))
+                .ok()
+                .and_then(|json| serde_json::from_str::<Manifest>(&json).ok())
+                .and_then(|cached| cached.files.get(name).map(|f| f.sha256.clone()))
+                .map(|cached_hash| cached_hash == entry.sha256)
+                .unwrap_or(false);
+
+            if cached_match {
+                tracing::info!(
+                    "updater: {} missing but cached manifest hash matches remote — skipping download",
+                    name
+                );
+                false
+            } else {
+                tracing::info!("updater: {} missing, will download", name);
+                true
+            }
         };
 
         if needs_update {

@@ -21,8 +21,8 @@ DRY_RUN=false
 
 for arg in "$@"; do
   case "$arg" in
-    --frontend-only) AGENT=false; TAURI=false; PRICING=false ;;
-    --agent-only)   FRONTEND=false; TAURI=false; PRICING=false ;;
+    --frontend-only) AGENT=false; TAURI=false ;;
+    --agent-only)   FRONTEND=false; TAURI=false ;;
     --tauri-only)   FRONTEND=false; AGENT=false; PRICING=false ;;
     --dry-run)      DRY_RUN=true ;;
     *)              echo "Unknown flag: $arg"; exit 1 ;;
@@ -41,23 +41,9 @@ echo "║  Frontend: $FRONTEND | Agent: $AGENT | Tauri: $TAURI"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 
-# ── 0. Preliminary manifest (version only) ────────────────────────────
-# Write a minimal manifest BEFORE the tauri build so build.rs can embed
-# the version into loader.exe.  Step 4 overwrites this with the full
-# manifest (version + file SHAs) after all assets are in place.
-PRELIM_MANIFEST="$DIST_DIR/manifest.json"
-cat > "$PRELIM_MANIFEST" <<JSON
-{
-  "version": "$VERSION",
-  "files": {}
-}
-JSON
-echo "─── [0/?] Preliminary manifest (version-only) ───"
-echo "  manifest.json  $(wc -c < $PRELIM_MANIFEST) bytes"
-
 # ── 1. Frontend (Vite + SWC) ────────────────────────────────────────
 if $FRONTEND; then
-  echo "─── [1/5] Frontend ───"
+  echo "─── [1/4] Frontend ───"
   if $DRY_RUN; then
     echo "  [dry-run] would run: npx vite build"
   else
@@ -72,7 +58,7 @@ fi
 
 # ── 2. Agent binaries ───────────────────────────────────────────────
 if $AGENT; then
-  echo "─── [2/5] Agent binaries ───"
+  echo "─── [2/4] Agent binaries ───"
   if $DRY_RUN; then
     echo "  [dry-run] cargo build -p remote-agent-host"
   else
@@ -90,27 +76,12 @@ if $AGENT; then
   fi
 fi
 
-# ── 3. Tauri shell (= loader.exe) ────────────────────────────────────
-# This is the single entry-point exe. It embeds frontend + agent binaries
-# as defaults, prefers cache/ on startup, and runs the OTA background updater.
-if $TAURI; then
-  echo "─── [3/4] App binary ───"
-  if $DRY_RUN; then
-    echo "  [dry-run] cargo xwin build -p remote-ai-ide"
-  else
-    START=$(date +%s)
-    cargo xwin build --target x86_64-pc-windows-msvc --release -p remote-ai-ide 2>&1 | grep -E "Finished|error" || true
-    cp target/x86_64-pc-windows-msvc/release/remote-ai-ide.exe "$DIST_DIR/loader.exe"
-    ELAPSED=$(( $(date +%s) - START ))
-    echo "  loader.exe  $(du -h $DIST_DIR/loader.exe | cut -f1)  (${ELAPSED}s)"
-  fi
-fi
-
-# ── 4. Pricing + Manifest ───────────────────────────────────────────
-# loader.exe is NOT in the manifest — it's the bootstrap entry point,
-# deployed once manually. Only cache-updatable files go in the manifest.
+# ── 3. Pricing + Manifest ───────────────────────────────────────────
+# MUST run before the tauri build — build.rs embeds dist/manifest.json
+# into loader.exe so startup can compare embedded-vs-cached versions.
+# loader.exe itself is NOT in the manifest; only cache-updatable files.
 if $PRICING; then
-  echo "─── [4/4] Pricing + Manifest ───"
+  echo "─── [3/4] Pricing + Manifest ───"
   cp pricing.json "$DIST_DIR/pricing.json"
 
   MANIFEST="$DIST_DIR/manifest.json"
@@ -132,6 +103,34 @@ if $PRICING; then
   echo "}" >> "$MANIFEST"
 
   echo "  manifest.json  $(wc -c < $MANIFEST) bytes"
+else
+  # ── No pricing step → generate version-only manifest for build.rs ──
+  # (e.g. --tauri-only: we still need a manifest for embedding)
+  MANIFEST="$DIST_DIR/manifest.json"
+  cat > "$MANIFEST" <<JSON
+{
+  "version": "$VERSION",
+  "files": {}
+}
+JSON
+  echo "─── [3/4] Manifest (version-only, no pricing) ───"
+  echo "  manifest.json  $(wc -c < $MANIFEST) bytes"
+fi
+
+# ── 4. Tauri shell (= loader.exe) ────────────────────────────────────
+# This is the single entry-point exe. It embeds frontend + agent binaries
+# as defaults, prefers cache/ on startup, and runs the OTA background updater.
+if $TAURI; then
+  echo "─── [4/4] App binary ───"
+  if $DRY_RUN; then
+    echo "  [dry-run] cargo xwin build -p remote-ai-ide"
+  else
+    START=$(date +%s)
+    cargo xwin build --target x86_64-pc-windows-msvc --release -p remote-ai-ide 2>&1 | grep -E "Finished|error" || true
+    cp target/x86_64-pc-windows-msvc/release/remote-ai-ide.exe "$DIST_DIR/loader.exe"
+    ELAPSED=$(( $(date +%s) - START ))
+    echo "  loader.exe  $(du -h $DIST_DIR/loader.exe | cut -f1)  (${ELAPSED}s)"
+  fi
 fi
 
 # ── Summary ──────────────────────────────────────────────────────────

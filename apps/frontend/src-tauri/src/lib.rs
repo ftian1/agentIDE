@@ -156,6 +156,16 @@ pub fn run() {
         .expect("Failed to create log file");
     log_msg!(&log_path_str, "[remote-ai-ide] Log file: {}", log_path_str);
 
+    // ── Print embedded version (from manifest embedded at compile time) ──
+    let embedded_version: String =
+        serde_json::from_str::<serde_json::Value>(manifest::EMBEDDED_MANIFEST_JSON)
+            .ok()
+            .and_then(|v| v.get("version").and_then(|ver| ver.as_str()).map(String::from))
+            .unwrap_or_else(|| "unknown".to_string());
+    log_msg!(&log_path_str, "[remote-ai-ide] ========================================");
+    log_msg!(&log_path_str, "[remote-ai-ide]  Version: {embedded_version}");
+    log_msg!(&log_path_str, "[remote-ai-ide] ========================================");
+
     // Set up tracing subscriber (writes to stderr + file via DebugWriter)
     let writer = DebugWriter { file: std::sync::Mutex::new(log_file) };
     tracing_subscriber::fmt()
