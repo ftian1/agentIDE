@@ -41,6 +41,20 @@ echo "║  Frontend: $FRONTEND | Agent: $AGENT | Tauri: $TAURI"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 
+# ── 0. Preliminary manifest (version only) ────────────────────────────
+# Write a minimal manifest BEFORE the tauri build so build.rs can embed
+# the version into loader.exe.  Step 4 overwrites this with the full
+# manifest (version + file SHAs) after all assets are in place.
+PRELIM_MANIFEST="$DIST_DIR/manifest.json"
+cat > "$PRELIM_MANIFEST" <<JSON
+{
+  "version": "$VERSION",
+  "files": {}
+}
+JSON
+echo "─── [0/?] Preliminary manifest (version-only) ───"
+echo "  manifest.json  $(wc -c < $PRELIM_MANIFEST) bytes"
+
 # ── 1. Frontend (Vite + SWC) ────────────────────────────────────────
 if $FRONTEND; then
   echo "─── [1/5] Frontend ───"

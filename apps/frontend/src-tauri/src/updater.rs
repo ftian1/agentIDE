@@ -5,14 +5,15 @@
 //! Runs entirely on a background thread; the frontend is notified via
 //! Tauri events (`update:available`, `update:progress`).
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 #[cfg(not(windows))]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
+
+use crate::manifest::{FileEntry, Manifest};
 
 // ── Config ──────────────────────────────────────────────────────────
 
@@ -24,20 +25,6 @@ const INITIAL_DELAY_SECS: u64 = 10;
 const CHECK_INTERVAL_SECS: u64 = 3; // 3 seconds
 const FETCH_TIMEOUT_SECS: u64 = 15;
 const DOWNLOAD_TIMEOUT_SECS: u64 = 120;
-
-// ── Types ───────────────────────────────────────────────────────────
-
-#[derive(Deserialize, Debug, Clone)]
-struct Manifest {
-    version: String,
-    files: HashMap<String, FileEntry>,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-struct FileEntry {
-    sha256: String,
-    size: u64,
-}
 
 /// Emitted to the frontend when one or more components were updated.
 #[derive(Clone, Serialize)]

@@ -4,6 +4,7 @@ pub mod commands;
 pub mod connection;
 pub mod transport;
 pub mod bootstrap;
+pub mod manifest;
 pub mod store;
 pub mod updater;
 
@@ -226,6 +227,68 @@ pub fn run() {
         .setup(move |app| {
             let app_handle = app.handle().clone();
             log_msg!(&log_path_clone, "[remote-ai-ide] >>> setup closure entered <<<");
+
+            // ── Compare embedded manifest vs cached manifest ──────────
+            // If embedded is newer (user downloaded a new loader.exe), clear
+            // the cache so embedded assets win over stale OTA-cached ones.
+            // Otherwise keep the cache (OTA updates or same version).
+            let embedded_manifest: manifest::Manifest =
+                serde_json::from_str(manifest::EMBEDDED_MANIFEST_JSON)
+                    .unwrap_or_else(|e| {
+                        log_msg!(&log_path_clone, "[remote-ai-ide] Failed to parse embedded manifest: {e}");
+                        manifest::Manifest {
+                            version: "0.0.0.dev".into(),
+                            files: std::collections::HashMap::new(),
+                        }
+                    });
+            log_msg!(&log_path_clone, "[remote-ai-ide] Embedded manifest version: {} ({} files)",
+                embedded_manifest.version, embedded_manifest.files.len());
+
+            let cache_manifest_path = cache_for_window.join("manifest.json");
+            if cache_manifest_path.exists() {
+                if let Ok(cache_json) = std::fs::read_to_string(&cache_manifest_path) {
+                    if let Ok(cache_manifest) = serde_json::from_str::<manifest::Manifest>(&cache_json) {
+                        log_msg!(&log_path_clone, "[remote-ai-ide] Cache manifest version: {} ({} files)",
+                            cache_manifest.version, cache_manifest.files.len());
+
+                        if embedded_manifest.version > cache_manifest.version {
+                            log_msg!(&log_path_clone,
+                                "[remote-ai-ide] Embedded ({}) newer than cache ({}) — clearing cache",
+                                embedded_manifest.version, cache_manifest.version);
+
+                            // Remove all files and dirs in the cache dir.
+                            if let Ok(entries) = std::fs::read_dir(&cache_for_window) {
+                                for entry in entries.flatten() {
+                                    let path = entry.path();
+                                    if path.is_dir() {
+                                        let _ = std::fs::remove_dir_all(&path);
+                                        log_msg!(&log_path_clone, "[remote-ai-ide] Removed cache dir: {}", path.display());
+                                    } else {
+                                        let _ = std::fs::remove_file(&path);
+                                    }
+                                }
+                            }
+
+                            // Write embedded manifest as the new cache baseline
+                            // so OTA checks have correct SHA hashes to compare against.
+                            if let Err(e) = std::fs::write(
+                                &cache_manifest_path,
+                                manifest::EMBEDDED_MANIFEST_JSON,
+                            ) {
+                                log_msg!(&log_path_clone, "[remote-ai-ide] Warning: failed to write embedded manifest to cache: {e}");
+                            } else {
+                                log_msg!(&log_path_clone, "[remote-ai-ide] Embedded manifest written to cache as baseline");
+                            }
+                        } else {
+                            log_msg!(&log_path_clone,
+                                "[remote-ai-ide] Cache ({}) >= embedded ({}) — using cache",
+                                cache_manifest.version, embedded_manifest.version);
+                        }
+                    }
+                }
+            } else {
+                log_msg!(&log_path_clone, "[remote-ai-ide] No cache manifest — will use embedded assets");
+            }
 
             // ── Create main window: prefer cache > dev server > embedded ──
             //   1. REMOTE_AI_IDE_DEV_URL  →  remote Vite dev server
