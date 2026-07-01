@@ -53,12 +53,13 @@ code changes** — otherwise the OTA updater on Windows clients won't see update
 
 **Full workflow after changes:**
 
-1. Run the appropriate release.sh flag
-2. If `--frontend-only` was used, restore unchanged binaries from git:
-   `git checkout HEAD -- dist/agent-*`
+1. Commit source changes first: `git commit -m "feat: <what changed>"`
+2. Run release.sh with appropriate flags (always in order: --frontend-only first, --agent-only second if needed, --tauri-only last)
 3. Force-add dist files (gitignored but tracked): `git add -f dist/`
-4. Commit: `git commit -m "release: $(date -u +%Y-%m-%d).$(git rev-parse --short=7 HEAD) — <what changed>"`
+4. Commit: `git commit -m "release: $(date -u +%Y%m%d-%H%M%S) — <what changed>"`
 5. Push — dist/ files are tracked in git despite `.gitignore` (force-added)
+
+Version format is `YYYYMMDD-HHMMSS` (UTC timestamp), e.g. `20260701-143052`.
 
 **What happens on the client:**
 - Windows exe's background updater fetches `dist/manifest.json` every 30 min

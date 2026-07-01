@@ -44,7 +44,7 @@ else
   mkdir -p "$DIST_DIR"
 fi
 
-VERSION="$(date -u +%Y-%m-%d).$(git rev-parse --short=7 HEAD 2>/dev/null || echo '0000000')"
+VERSION="$(date -u +%Y%m%d-%H%M%S)"
 echo ""
 echo "╔══════════════════════════════════════════════════╗"
 echo "║  Release: $VERSION"
