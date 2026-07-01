@@ -5,7 +5,7 @@
 use tauri::{AppHandle, Emitter};
 
 use super::detector;
-use super::uploader::{self, get_embedded};
+use super::uploader::{self, get_agent_binary};
 use crate::connection::ssh::SshSession;
 
 /// Phases of the bootstrap process emitted as Tauri events.
@@ -49,13 +49,13 @@ pub async fn run_bootstrap(
     let arch = &info.arch;
     emit("detecting", 0.3, &format!("Detected: {} {}", info.platform, arch), None);
 
-    // Step 2: Check if we need to upload — compare embedded SHA256 with remote SHA256
-    let binary = get_embedded(arch)
-        .ok_or_else(|| anyhow::anyhow!("Unsupported architecture: {}", arch))?;
+    // Step 2: Get agent binary (from cache, or download from OTA server)
+    let binary = get_agent_binary(arch).await
+        .map_err(|e| anyhow::anyhow!("Cannot get agent binary for {}: {}", arch, e))?;
     let embedded_hash = binary.sha256_hex();
 
     // Show full hashes in BOTH the bootstrap progress UI AND the agent output.
-    let exe_hash_msg = format!("[bootstrap] Exe embedded  SHA256: {}", embedded_hash);
+    let exe_hash_msg = format!("[bootstrap] Local agent  SHA256: {}", embedded_hash);
     let remote_hash_msg = format!("[bootstrap] Remote agent SHA256: {}", info.agent_sha256);
     emit("detecting", 0.3, &exe_hash_msg, None);
     emit("detecting", 0.3, &remote_hash_msg, None);

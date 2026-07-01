@@ -2,16 +2,24 @@
 //!
 //! Uses raw binary transfer over an SSH channel (single operation, no
 //! base64 encoding, no chunking, no inter-chunk sleep).
+//!
+//! The agent binary is NOT embedded in the exe via include_bytes! — that
+//! pattern tripped AV heuristics ("PE containing another PE" = dropper).
+//! Instead, the binary is downloaded on demand from the OTA server and
+//! cached locally.  The OTA background updater also pre-fetches it, so
+//! the first SSH connection after startup normally finds it already cached.
 
 use anyhow::Context;
 use sha2::{Sha256, Digest};
 
 use crate::connection::ssh::{self, SshSession};
 
-pub struct EmbeddedBinary {
-    pub arch: &'static str,
-    pub data: &'static [u8],
-    /// Pre-computed SHA256 hex string (computed once at first access).
+/// OTA distribution base URL (same as updater::DIST_BASE).
+const DIST_BASE: &str = "https://raw.githubusercontent.com/ftian1/agentIDE/main/dist/";
+
+pub struct AgentBinary {
+    pub arch: String,
+    pub data: Vec<u8>,
     sha256: std::sync::OnceLock<String>,
 }
 
@@ -23,19 +31,25 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     })
 }
 
-impl EmbeddedBinary {
+impl AgentBinary {
     pub fn sha256_hex(&self) -> &str {
         self.sha256.get_or_init(|| {
             let mut hasher = Sha256::new();
-            hasher.update(self.data);
+            hasher.update(&self.data);
             bytes_to_hex(&hasher.finalize())
         })
     }
 }
 
-pub fn get_embedded(arch: &str) -> Option<EmbeddedBinary> {
-    // 1. Try the OTA cache first (updated by loader.exe).
-    let cache_path = crate::cache_dir().join(format!("agent-linux-{arch}"));
+/// Get the agent binary for the given architecture.
+///
+/// 1. Try the OTA cache (populated by the background updater or a prior download).
+/// 2. If missing, download from the OTA server and save to cache.
+pub async fn get_agent_binary(arch: &str) -> anyhow::Result<AgentBinary> {
+    let filename = format!("agent-linux-{arch}");
+    let cache_path = crate::cache_dir().join(&filename);
+
+    // 1. Try the OTA cache first.
     if cache_path.exists() {
         if let Ok(data) = std::fs::read(&cache_path) {
             tracing::info!(
@@ -43,33 +57,113 @@ pub fn get_embedded(arch: &str) -> Option<EmbeddedBinary> {
                 size_kb = data.len() as f64 / 1024.0,
                 "Using agent binary from cache"
             );
-            // Leak the arch string so it lives for the program lifetime.
-            let arch_static: &'static str = Box::leak(arch.to_string().into_boxed_str());
-            // Leak the binary data for the same reason.
-            let data_static: &'static [u8] = data.leak();
-            return Some(EmbeddedBinary {
-                arch: arch_static,
-                data: data_static,
+            return Ok(AgentBinary {
+                arch: arch.to_string(),
+                data,
                 sha256: std::sync::OnceLock::new(),
             });
         }
+        // Corrupt cache file — remove it and re-download.
+        let _ = std::fs::remove_file(&cache_path);
     }
 
-    // 2. Fallback to the compile-time embedded binary.
-    match arch {
-        "x86_64" => Some(EmbeddedBinary {
-            arch: "x86_64",
-            data: include_bytes!("../../binaries/remote-agent-host-x86_64"),
-            sha256: std::sync::OnceLock::new(),
-        }),
-        "aarch64" => Some(EmbeddedBinary {
-            arch: "aarch64",
-            data: include_bytes!("../../binaries/remote-agent-host-aarch64"),
-            sha256: std::sync::OnceLock::new(),
-        }),
-        _ => None,
+    // 2. Download from OTA server.
+    let url = format!("{DIST_BASE}{filename}");
+    tracing::info!(%url, arch, "Agent binary not in cache, downloading");
+
+    let data = download_agent(&url).await
+        .with_context(|| format!("Failed to download agent binary from {url}"))?;
+
+    tracing::info!(arch, size_kb = data.len() as f64 / 1024.0, "Agent binary downloaded");
+
+    // Save to cache for future use.
+    if let Err(e) = std::fs::write(&cache_path, &data) {
+        tracing::warn!(path = %cache_path.display(), error = %e, "Failed to cache agent binary");
+    }
+
+    Ok(AgentBinary {
+        arch: arch.to_string(),
+        data,
+        sha256: std::sync::OnceLock::new(),
+    })
+}
+
+// ── HTTP download (platform-specific) ────────────────────────────────
+
+async fn download_agent(url: &str) -> anyhow::Result<Vec<u8>> {
+    download_agent_inner(url).await
+}
+
+#[cfg(windows)]
+mod download {
+    use anyhow::Context;
+
+    pub async fn download_agent_inner(url: &str) -> anyhow::Result<Vec<u8>> {
+        let url = url.to_string();
+        tokio::task::spawn_blocking(move || {
+            let (status, body) = crate::commands::winhttp::get(
+                &url,
+                &[("User-Agent", "remote-ai-ide-bootstrap/0.1")],
+            )
+            .map_err(|e| anyhow::anyhow!("WinHTTP GET {url}: {e}"))?;
+            if status < 200 || status >= 300 {
+                anyhow::bail!("WinHTTP GET {url} returned HTTP {status}");
+            }
+            Ok(body)
+        })
+        .await
+        .context("spawn_blocking join")?
     }
 }
+
+#[cfg(not(windows))]
+mod download {
+    use anyhow::Context;
+
+    pub async fn download_agent_inner(url: &str) -> anyhow::Result<Vec<u8>> {
+        let client = build_reqwest_client(120)?; // 120 s timeout for ~4 MB binary
+        let resp = client
+            .get(url)
+            .header("User-Agent", "remote-ai-ide-bootstrap/0.1")
+            .send()
+            .await
+            .context("reqwest GET")?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("GET {url} returned HTTP {}", resp.status());
+        }
+
+        resp.bytes()
+            .await
+            .context("reading response body")
+            .map(|b| b.to_vec())
+    }
+
+    fn build_reqwest_client(timeout_secs: u64) -> anyhow::Result<reqwest::Client> {
+        let mut builder = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(timeout_secs))
+            .timeout(std::time::Duration::from_secs(timeout_secs));
+
+        // Detect proxy from env vars (same as updater.rs).
+        for key in &["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+            if let Ok(val) = std::env::var(key) {
+                let val = val.trim().to_string();
+                if !val.is_empty() {
+                    if let Ok(p) = reqwest::Proxy::all(&val) {
+                        tracing::debug!(%val, "agent download: using proxy");
+                        builder = builder.proxy(p);
+                        builder = builder.danger_accept_invalid_certs(true);
+                    }
+                    break;
+                }
+            }
+        }
+
+        Ok(builder.build()?)
+    }
+}
+
+use download::download_agent_inner;
 
 /// Upload the agent binary to the remote host.
 ///
@@ -82,7 +176,7 @@ pub fn get_embedded(arch: &str) -> Option<EmbeddedBinary> {
 /// Nagle disabled on the SSH socket, the raw write itself is ~1 RTT.
 pub async fn upload_agent(
     session: &SshSession,
-    binary: &EmbeddedBinary,
+    binary: &AgentBinary,
     home_dir: &str,
 ) -> anyhow::Result<String> {
     let dir = format!("{}/.remote-agent-host", home_dir.trim_end_matches('/'));
@@ -95,7 +189,7 @@ pub async fn upload_agent(
     // so this fuses mkdir + write into one channel.
     let written = ssh::upload_raw_cmd(
         session,
-        binary.data,
+        &binary.data,
         &format!("mkdir -p {dir} && cat > {tmp_path}"),
     )
     .await
